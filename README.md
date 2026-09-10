@@ -33,7 +33,7 @@ docker exec -it ente-cli /usr/local/bin/ente-cli account add
 ```yaml
 services:
   ente-cli:
-    image: wittch/ente-cli:latest
+    image: wittchy/ente-cli:latest
     container_name: ente-cli
     restart: unless-stopped
     volumes:
