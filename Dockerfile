@@ -1,10 +1,10 @@
-FROM golang:1.22-alpine AS builder
-RUN apk add --no-cache git
+FROM golang:1.24-alpine AS builder
+RUN apk add --no-cache git gcc musl-dev build-base libsodium-dev
 WORKDIR /build
 RUN git clone --depth=1 https://github.com/ente-io/ente.git
-RUN cd ente/cli && go build -o bin/ente main.go
+RUN cd ente/cli && go mod download && go build -o bin/ente main.go
 
-FROM alpine:3.19
+FROM alpine:3.21
 RUN apk add --no-cache bash \
     && addgroup -g 1000 enteuser \
     && adduser -D -u 1000 -G enteuser enteuser \
