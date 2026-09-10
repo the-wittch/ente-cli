@@ -1,11 +1,8 @@
 FROM golang:1.22-alpine AS builder
 RUN apk add --no-cache git
 WORKDIR /build
-RUN git clone --depth=1 --filter=blob:none --sparse https://github.com/ente-io/ente.git \
-    && cd ente \
-    && git sparse-checkout set cli \
-    && cd cli \
-    && go build -o bin/ente main.go
+RUN git clone --depth=1 https://github.com/ente-io/ente.git
+RUN cd ente/cli && go build -o bin/ente main.go
 
 FROM alpine:3.19
 RUN apk add --no-cache bash \
