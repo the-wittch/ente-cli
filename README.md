@@ -1,6 +1,7 @@
 # ente-cli
 
 [![Build and Push to Docker Hub](https://github.com/the-wittch/ente-cli/actions/workflows/docker.yml/badge.svg?branch=main)](https://github.com/the-wittch/ente-cli/actions/workflows/docker.yml)
+[![Cleanup Docker Hub Tags](https://github.com/the-wittch/ente-cli/actions/workflows/cleanup.yml/badge.svg)](https://github.com/the-wittch/ente-cli/actions/workflows/cleanup.yml)
 
 Minimal Alpine container for the [Ente CLI](https://github.com/ente-io/ente/tree/main/cli) with built-in cron support for automated, scheduled exports.
 
