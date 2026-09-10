@@ -73,8 +73,7 @@ jobs:
           git add UPSTREAM_SHA
           git commit -m "chore: update upstream SHA to ${{ steps.upstream.outputs.sha }}"
           git push
-
-cleanup:
+  cleanup:
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule'
     steps:
@@ -88,15 +87,15 @@ cleanup:
           TAGS=$(curl -s -u "$DOCKERHUB_USERNAME:$DOCKERHUB_TOKEN" \
             "https://hub.docker.com/v2/repositories/$REPO/tags?page_size=100" \
             | jq -r '.results[] | "\(.name) \(.id)"')
-
+  
           # Count sha tags to keep (exclude "latest")
           KEEP=0
-
+  
           while read -r name id; do
             if [ "$name" = "latest" ]; then
               continue
             fi
-
+  
             if [ "$KEEP" -lt 3 ]; then
               KEEP=$((KEEP + 1))
               echo "Keeping: $name"
@@ -106,3 +105,4 @@ cleanup:
                 -X DELETE "https://hub.docker.com/v2/repositories/$REPO/tags/$id"
             fi
           done <<< "$TAGS"
+  
