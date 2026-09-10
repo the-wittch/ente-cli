@@ -1,4 +1,4 @@
-FROM golang:latest-alpine AS builder
+FROM golang:alpine AS builder   
 RUN apk add --no-cache git
 WORKDIR /build
 RUN git clone --depth=1 https://github.com/ente-io/ente.git
