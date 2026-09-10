@@ -1,8 +1,8 @@
-FROM golang:1.24-alpine AS builder
-RUN apk add --no-cache git gcc musl-dev build-base libsodium-dev
+FROM golang:latest-alpine AS builder
+RUN apk add --no-cache git
 WORKDIR /build
 RUN git clone --depth=1 https://github.com/ente-io/ente.git
-RUN cd ente/cli && go mod download && go build -o bin/ente main.go
+RUN cd ente/cli && CGO_ENABLED=0 go build -o bin/ente main.go
 
 FROM alpine:3.21
 RUN apk add --no-cache bash \
