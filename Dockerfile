@@ -10,6 +10,8 @@ RUN apk add --no-cache bash \
     && adduser -D -u 1000 -G enteuser enteuser \
     && mkdir -p /cli-data /data /var/log
 COPY --from=builder /build/ente/cli/bin/ente /usr/local/bin/ente-cli
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 USER enteuser
 VOLUME /cli-data /data
-CMD ["crond", "-f", "-l", "8"]   
+CMD ["/entrypoint.sh"]
