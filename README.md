@@ -81,12 +81,12 @@ docker exec -it ente-cli cat /var/log/ente-export.log
 
 ## Building
 
-The image is built automatically by GitHub Actions on every push to `main` and pushed to `wittch/ente-cli:latest` on Docker Hub.
+The image is built automatically by GitHub Actions on every push to `main` and pushed to `wittchy/ente-cli:latest` on Docker Hub.
 
 To build locally:
 
 ```bash
-docker build -t wittch/ente-cli:latest .
+docker build -t wittchy/ente-cli:latest .
 ```
 
 ## Security Notes
