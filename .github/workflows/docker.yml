@@ -67,9 +67,19 @@ jobs:
       - name: Update upstream SHA
         if: steps.changed.outputs.changed == 'true'
         run: |
-          echo "${{ steps.upstream.outputs.sha }}" > UPSTREAM_SHA
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add UPSTREAM_SHA
-          git commit -m "chore: update upstream SHA to ${{ steps.upstream.outputs.sha }}"
-          git push
+          NEW_SHA="${{ steps.upstream.outputs.sha }}"
+          OLD_SHA=""
+          if [ -f UPSTREAM_SHA ]; then
+            OLD_SHA=$(cat UPSTREAM_SHA)
+          fi
+
+          if [ "$NEW_SHA" != "$OLD_SHA" ]; then
+            echo "$NEW_SHA" > UPSTREAM_SHA
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add UPSTREAM_SHA
+            git commit -m "chore: update upstream SHA to $NEW_SHA"
+            git push
+          else
+            echo "SHA unchanged, skipping commit."
+          fi
