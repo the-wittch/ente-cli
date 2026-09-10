@@ -15,14 +15,30 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           REPO: wittchy/ente-cli
         run: |
-          TAGS=$(curl -s -u "$DOCKERHUB_USERNAME:$DOCKERHUB_TOKEN" \
-            "https://hub.docker.com/v2/repositories/$REPO/tags?page_size=100" \
-            | jq -r '.results[] | "\(.name) \(.id)"')
+          # Step 1: Get JWT token
+          JWT=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"username\": \"$DOCKERHUB_USERNAME\", \"password\": \"$DOCKERHUB_TOKEN\"}" \
+            https://hub.docker.com/v2/users/login/ \
+            | jq -r '.token')
 
+          if [ "$JWT" = "null" ] || [ -z "$JWT" ]; then
+            echo "ERROR: Failed to authenticate with Docker Hub"
+            exit 1
+          fi
+          echo "Authenticated successfully"
+
+          # Step 2: Get all tags sorted by last_updated (newest first)
+          TAGS=$(curl -s \
+            -H "Authorization: JWT $JWT" \
+            "https://hub.docker.com/v2/repositories/$REPO/tags/?page_size=100&ordering=-last_updated" \
+            | jq -r '.results[].name')
+
+          # Step 3: Keep latest + last 3, delete the rest
           KEEP=0
-
-          while read -r name id; do
+          while IFS= read -r name; do
             if [ "$name" = "latest" ]; then
+              echo "Keeping: $name"
               continue
             fi
 
@@ -31,7 +47,8 @@ jobs:
               echo "Keeping: $name"
             else
               echo "Deleting: $name"
-              curl -s -u "$DOCKERHUB_USERNAME:$DOCKERHUB_TOKEN" \
-                -X DELETE "https://hub.docker.com/v2/repositories/$REPO/tags/$id"
+              curl -s -X DELETE \
+                -H "Authorization: JWT $JWT" \
+                "https://hub.docker.com/v2/repositories/$REPO/tags/$name/"
             fi
           done <<< "$TAGS"   
