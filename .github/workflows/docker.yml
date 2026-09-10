@@ -3,6 +3,8 @@ name: Build and Push to Docker Hub
 on:
   push:
     branches: [main]
+  schedule:
+    - cron: '0 3 * * *'
 
 jobs:
   build:
@@ -25,4 +27,6 @@ jobs:
           push: true
           tags: |
             wittchy/ente-cli:latest
-            wittchy/ente-cli:${{ github.sha }}
+            wittch/ente-cli:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max   
