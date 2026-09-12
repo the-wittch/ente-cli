@@ -1,1 +1,1 @@
-0 */6 * * * enteuser /usr/local/bin/ente-cli export >> /var/log/ente-export.log 2>&1   
+0 */6 * * * /usr/local/bin/ente-cli export >> /var/log/ente-export.log
