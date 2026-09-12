@@ -8,13 +8,9 @@ echo ""
 if [ ! -f /cli-data/ente-cli.db ]; then
     echo "WARNING: /cli-data/ente-cli.db not found."
     echo "You need to run 'ente-cli account add' to log in first."
-    echo "  docker exec -it <container> /usr/local/bin/ente-cli account add"
+    echo "  docker exec -it ente-cli /usr/local/bin/ente-cli account add"
     echo ""
 fi
-
-cat <<EOF > /etc/crontabs/enteuser
-0 */6 * * * /usr/local/bin/ente-cli export >> /var/log/ente-export.log
-EOF
 
 echo "Crontab:"
 cat /etc/crontabs/enteuser | sed 's/^/  /'
