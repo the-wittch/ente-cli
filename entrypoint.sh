@@ -10,4 +10,8 @@ echo ""
 echo "Starting crond..."
 echo "================================="
 
+cat <<EOF > /etc/crontabs/enteuser
+0 */6 * * * /usr/local/bin/ente-cli export
+EOF
+
 exec crond -f -l 8
