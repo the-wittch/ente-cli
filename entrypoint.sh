@@ -12,6 +12,10 @@ if [ ! -f /cli-data/ente-cli.db ]; then
     echo ""
 fi
 
+cat <<EOF > /etc/crontabs/enteuser
+0 */6 * * * /usr/local/bin/ente-cli export >> /var/log/ente-export.log
+EOF
+
 echo "Crontab:"
 cat /etc/crontabs/enteuser | sed 's/^/  /'
 echo ""
