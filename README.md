@@ -19,7 +19,7 @@ Built from source on every push via GitHub Actions and published to [Docker Hub]
 ```bash
 # Create directories and crontab
 mkdir -p cli-data export
-echo "0 2 * * * enteuser /usr/local/bin/ente-cli export >> /var/log/ente-export.log 2>&1" > crontab
+echo "0 */6 * * * /usr/local/bin/ente-cli export 2>&1" > crontab
 
 # Start
 docker compose up -d
@@ -33,13 +33,24 @@ docker exec -it ente-cli /usr/local/bin/ente-cli account add
 ```yaml
 services:
   ente-cli:
-    image: wittchy/ente-cli:latest
+    image: wittchy/ente-cli:${IMAGE_TAG:-latest}
     container_name: ente-cli
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
-      - ./cli-data:/cli-data:rw
-      - ./export:/data:rw
-      - ./crontab:/etc/crontabs/enteuser:ro
+      - ${ENTE_DATA_PATH}/cli-data:/cli-data:rw
+      - ${ENTE_DATA_PATH}/data:/data:rw
+      - ${ENTE_CRONTAB_PATH}:/etc/crontabs/enteuser:rw
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true
 ```
 
 ## Cron Schedules
@@ -55,7 +66,7 @@ Edit your `crontab` file, then `docker compose restart`:
 Full format:
 
 ```
-0 2 * * * enteuser /usr/local/bin/ente-cli export >> /var/log/ente-export.log 2>&1
+0 */6 * * * /usr/local/bin/ente-cli export 2>&1
 ```
 
 ## Usage
@@ -67,8 +78,6 @@ docker exec -it ente-cli /usr/local/bin/ente-cli account list
 # Run an export manually
 docker exec -it ente-cli /usr/local/bin/ente-cli export
 
-# Check the export log
-docker exec -it ente-cli cat /var/log/ente-export.log
 ```
 
 ## Volumes
