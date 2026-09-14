@@ -13,6 +13,5 @@ RUN apk add --no-cache bash dcron \
 COPY --from=builder /build/ente/cli/bin/ente /usr/local/bin/ente-cli
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-USER enteuser
 VOLUME /cli-data /data
 CMD ["/entrypoint.sh"]
