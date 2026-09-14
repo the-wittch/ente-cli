@@ -18,4 +18,8 @@ echo ""
 echo "Starting crond..."
 echo "================================="
 
+# Ensure crontab has correct permissions
+chmod 600 /var/spool/cron/crontabs/enteuser 2>/dev/null
+
+# Run crond as root (it will drop to enteuser for job execution)
 exec crond -f -l 2
