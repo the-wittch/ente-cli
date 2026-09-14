@@ -13,11 +13,9 @@ if [ ! -f /cli-data/ente-cli.db ]; then
 fi
 
 echo "Crontab:"
-cat /etc/crontabs/enteuser | sed 's/^/  /'
+cat /var/spool/cron/crontabs/enteuser 2>/dev/null | sed 's/^/  /' || echo "  (none found)"
 echo ""
 echo "Starting crond..."
 echo "================================="
 
-cp /etc/crontabs/enteuser /var/spool/cron/crontabs/enteuser
-chmod 600 /var/spool/cron/crontabs/enteuser
-exec crond -f -l 8
+exec crond -f -l 2
