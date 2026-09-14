@@ -18,5 +18,6 @@ echo ""
 echo "Starting crond..."
 echo "================================="
 
+cp /etc/crontabs/enteuser /var/spool/cron/crontabs/enteuser
 chmod 600 /var/spool/cron/crontabs/enteuser
-exec crond -f -l 8   
+exec crond -f -l 8
