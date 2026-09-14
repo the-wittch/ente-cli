@@ -12,14 +12,15 @@ if [ ! -f /cli-data/ente-cli.db ]; then
     echo ""
 fi
 
-echo "Crontab:"
-cat /var/spool/cron/crontabs/enteuser 2>/dev/null | sed 's/^/  /' || echo "  (none found)"
+echo "Cron schedule: every 6 hours"
 echo ""
-echo "Starting crond..."
+echo "Starting scheduler..."
 echo "================================="
 
-# Ensure crontab has correct permissions
-chmod 600 /var/spool/cron/crontabs/enteuser 2>/dev/null
-
-# Run crond as root (it will drop to enteuser for job execution)
-exec crond -f -l 2
+# Run cron job every 6 hours
+while true; do
+    echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] Running scheduled export job..."
+    /usr/local/bin/ente-cli export 2>&1 | sed 's/^/  /'
+    echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] Job complete. Next run in 6 hours."
+    sleep 21600  # 6 hours in seconds
+done
