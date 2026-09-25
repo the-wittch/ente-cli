@@ -147,6 +147,19 @@ output, and completion message to standard output, so they are visible in
 Docker, Portainer, and Arcane logs. BusyBox cron uses the container's timezone;
 configure the timezone if local-time scheduling is required.
 
+At startup, the container also logs the selected scheduler, for example:
+
+```
+Selected scheduler: loop (every 21600 seconds)
+```
+
+or:
+
+```
+Selected scheduler: cron
+Starting Alpine BusyBox crond in foreground...
+```
+
 ## CLI Usage
 
 ```bash

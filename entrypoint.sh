@@ -33,10 +33,10 @@ fi
 
 case "$SCHEDULER" in
     loop)
-        echo "Scheduler: loop (every ${LOOP_INTERVAL} seconds)"
+        echo "Selected scheduler: loop (every ${LOOP_INTERVAL} seconds)"
         ;;
     cron)
-        echo "Scheduler: cron"
+        echo "Selected scheduler: cron"
         if [ -f "$CRONTAB_FILE" ]; then
             echo "Crontab: $CRONTAB_FILE"
         else
@@ -57,9 +57,11 @@ echo "Starting scheduler..."
 echo "================================="
 
 if [ "$SCHEDULER" = "cron" ]; then
+    echo "Starting Alpine BusyBox crond in foreground..."
     exec crond -f -l 2 -c "$CRONTAB_DIR"
 fi
 
+echo "Starting loop scheduler..."
 while true; do
     run_export
     echo "Next run in ${LOOP_INTERVAL} seconds."
