@@ -57,8 +57,11 @@ echo "Starting scheduler..."
 echo "================================="
 
 if [ "$SCHEDULER" = "cron" ]; then
-    echo "Starting Alpine BusyBox crond in foreground..."
-    exec crond -f -l 2 -c "$CRONTAB_DIR"
+    echo "Running initial export before waiting for the next cron time..."
+    run_export
+    echo "Initial export complete."
+    echo "Starting Alpine BusyBox crond in foreground (logging to stdout)..."
+    exec crond -f -l 2 -L /proc/1/fd/1 -c "$CRONTAB_DIR"
 fi
 
 echo "Starting loop scheduler..."

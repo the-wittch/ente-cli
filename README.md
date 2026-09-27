@@ -68,9 +68,9 @@ networks:
 This uses Alpine BusyBox `crond` and runs exports at the scheduled clock times.
 The container generates its crontab from `CRON_SCHEDULE`.
 
-Cron does not run an export immediately at container startup. It waits for the
-next matching clock time, so a schedule such as `0 */6 * * *` may wait several
-hours before its first run. Run an export manually after login if needed.
+Cron runs one export immediately at container startup, then waits for the next
+matching clock time. A schedule such as `0 */6 * * *` therefore runs once on
+startup and subsequently at six-hour boundaries.
 
 ```yaml
 services:
@@ -142,10 +142,11 @@ Full format:
 ```
 
 `crond` runs in the foreground in cron mode, so it remains the container's
-main process. Both scheduler modes write the export start message, command
-output, and completion message to standard output, so they are visible in
-Docker, Portainer, and Arcane logs. BusyBox cron uses the container's timezone;
-configure the timezone if local-time scheduling is required.
+main process. BusyBox scheduler diagnostics and both scheduler modes' export
+start message, command output, and completion message are written to standard
+output, so they are visible in Docker, Portainer, and Arcane live logs. BusyBox
+cron uses the container's timezone; configure the timezone if local-time
+scheduling is required.
 
 At startup, the container also logs the selected scheduler, for example:
 
@@ -157,7 +158,7 @@ or:
 
 ```
 Selected scheduler: cron
-Starting Alpine BusyBox crond in foreground...
+Starting Alpine BusyBox crond in foreground (logging to stdout)...
 ```
 
 ## CLI Usage
