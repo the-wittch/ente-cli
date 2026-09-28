@@ -43,6 +43,7 @@ Optional environment overrides for Compose:
 | `CROND_LOG_LEVEL` | `8` | BusyBox `crond` verbosity (`8` quiet; `2`/`0` for debug) |
 | `TZ` | `UTC` | Container timezone (affects cron local time + log timestamps) |
 | `HEALTHCHECK_URL` | _(empty)_ | Push URL for Healthchecks.io / Uptime Kuma / similar |
+| `HEALTHCHECK_PROVIDER` | _(auto)_ | `healthchecks`, `uptime-kuma` / `kuma`, or leave empty to auto-detect from the URL |
 | `ENTE_DATA_PATH` | `.` | Host directory containing `cli-data/` and `data/` |
 | `RUN_USER` | `enteuser` | User for loop mode after privilege drop |
 
@@ -195,7 +196,12 @@ environment:
 
 ## Healthchecks / monitoring pings
 
-Set `HEALTHCHECK_URL` to a push endpoint. On each export the container will:
+Set `HEALTHCHECK_URL` to a push endpoint. The provider is auto-detected from
+the URL (`/api/push/` → Uptime Kuma; otherwise Healthchecks.io-style), or set
+explicitly with `HEALTHCHECK_PROVIDER` (`healthchecks`, `uptime-kuma`, or
+`kuma`).
+
+### Healthchecks.io
 
 | Event | Request |
 |-------|---------|
@@ -203,14 +209,35 @@ Set `HEALTHCHECK_URL` to a push endpoint. On each export the container will:
 | Job success | `GET $HEALTHCHECK_URL` |
 | Job failure | `GET $HEALTHCHECK_URL/fail` |
 
-This matches [Healthchecks.io](https://healthchecks.io) and is compatible with
-other monitors that use the same URL shape (for example Uptime Kuma push
-monitors).
-
 ```yaml
 environment:
   HEALTHCHECK_URL: https://hc-ping.com/your-uuid-here
 ```
+
+### Uptime Kuma (Push monitor)
+
+Create a **Push** monitor in Uptime Kuma and paste its push URL. Example for a
+host like `https://up.example.com`:
+
+```yaml
+environment:
+  HEALTHCHECK_URL: https://up.example.com/api/push/TOKEN
+  # Optional — auto-detected when the URL contains /api/push/
+  # HEALTHCHECK_PROVIDER: uptime-kuma
+```
+
+| Event | Request |
+|-------|---------|
+| Job start | _(skipped — Kuma has no start heartbeat; sending one would reset the timer early during long exports)_ |
+| Job success | `GET $HEALTHCHECK_URL?status=up&msg=ok` |
+| Job failure | `GET $HEALTHCHECK_URL?status=down&msg=fail` |
+
+If the push URL already has a query string, parameters are appended with `&`.
+
+**Heartbeat interval:** set the Kuma monitor’s heartbeat slightly longer than
+your export interval so a slow job still finishes before the monitor goes down.
+Examples: loop every 6h (`LOOP_INTERVAL=21600`) → heartbeat 7–8h; cron every
+6h → heartbeat ~7–8h.
 
 Ping failures are logged as warnings and never fail the export job itself.
 
