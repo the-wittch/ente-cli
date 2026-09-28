@@ -5,11 +5,12 @@
 
 Minimal Alpine container for the [Ente CLI](https://github.com/ente-io/ente/tree/main/cli) with configurable loop or cron scheduling for automated exports.
 
-Built from a pinned `ente-io/ente` commit via GitHub Actions and published to [Docker Hub](https://hub.docker.com/r/wittchy/ente-cli) for `linux/amd64` and `linux/arm64`.
+Built from the latest upstream [`cli-v*`](https://github.com/ente-io/ente/releases) release tag via GitHub Actions and published to [Docker Hub](https://hub.docker.com/r/wittchy/ente-cli) for `linux/amd64` and `linux/arm64`.
 
 ## Features
 
-- Static `ente-cli` binary built from a pinned `ente-io/ente` commit (sparse checkout of `cli/` only)
+- Static `ente-cli` binary built from a pinned `cli-v*` release (sparse checkout of `cli/` only)
+- Digest-pinned base images and commit-SHA-pinned GitHub Actions
 - Loop-based scheduled exports by default (runs as non-root `enteuser`)
 - Optional Alpine BusyBox cron scheduling (root; configurable via env or a mounted crontab)
 - Timezone support via `TZ` + `tzdata`
@@ -242,23 +243,25 @@ baked-in `TZ` / `HEALTHCHECK_URL`.
 ## Building
 
 The image is built automatically by GitHub Actions on every push to `main`
-(and daily when upstream `ente-io/ente` changes). Images are tagged as:
+(and daily when a new upstream `cli-v*` tag appears). Images are tagged as:
 
 - `wittchy/ente-cli:latest`
+- `wittchy/ente-cli:cli-v0.3.0` (upstream release tag)
+- `wittchy/ente-cli:v0.3.0` (version with `cli-` prefix stripped)
 - `wittchy/ente-cli:<github-sha>`
-- `wittchy/ente-cli:upstream-<12-char-upstream-sha>`
 
-Schedule skip detection uses the Actions cache (last built upstream SHA).
-When the pin in `UPSTREAM_SHA` is stale after a successful build, CI opens a
-PR on `chore/upstream-sha` instead of committing directly to `main`.
+Schedule skip detection uses the Actions cache (last built upstream tag).
+When the pin in `UPSTREAM_TAG` is stale after a successful build, CI opens a
+PR on `chore/upstream-tag` instead of committing directly to `main`.
 
-To build locally against the recorded upstream commit:
+To build locally against the recorded upstream release:
 
 ```bash
+TAG="$(cat UPSTREAM_TAG)"
 docker build \
-  --build-arg UPSTREAM_SHA="$(cat UPSTREAM_SHA)" \
-  --build-arg VERSION="$(cut -c1-12 UPSTREAM_SHA)" \
-  -t wittchy/ente-cli:latest .
+  --build-arg UPSTREAM_REF="$TAG" \
+  --build-arg VERSION="${TAG#cli-}" \
+  -t "wittchy/ente-cli:${TAG}" .
 ```
 
 ## Security Notes
