@@ -92,7 +92,8 @@ echo "----------------"
 grep -q 'Selected scheduler: cron' "$CRON_LOG"
 grep -q 'HEALTHCHECK_URL=https://example.invalid/ping' "$CRON_LOG"
 grep -q 'Starting Alpine BusyBox crond' "$CRON_LOG"
-grep -q 'crond (busybox' "$CRON_LOG"
+grep -q 'Cron will stay quiet until the next schedule match' "$CRON_LOG"
+grep -q 'BusyBox debug noise is disabled unless CROND_LOG_LEVEL is lowered' "$CRON_LOG"
 CRON_JOBS="$(grep -c 'MOCK_EXPORT ' "$CRON_LOG" || true)"
 if [ "$CRON_JOBS" -lt 2 ]; then
     echo "ERROR: expected initial + scheduled cron export (>=2), got $CRON_JOBS" >&2

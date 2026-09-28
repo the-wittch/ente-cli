@@ -40,6 +40,7 @@ Optional environment overrides for Compose:
 | `SCHEDULER` | `loop` | `loop` or `cron` |
 | `LOOP_INTERVAL` | `21600` | Seconds between loop exports |
 | `CRON_SCHEDULE` | `0 */6 * * *` | Cron expression when `SCHEDULER=cron` |
+| `CROND_LOG_LEVEL` | `8` | BusyBox `crond` verbosity (`8` quiet; `2`/`0` for debug) |
 | `TZ` | `UTC` | Container timezone (affects cron local time + log timestamps) |
 | `HEALTHCHECK_URL` | _(empty)_ | Push URL for Healthchecks.io / Uptime Kuma / similar |
 | `ENTE_DATA_PATH` | `.` | Host directory containing `cli-data/` and `data/` |
@@ -83,8 +84,10 @@ This uses Alpine BusyBox `crond` and runs exports at the scheduled clock times.
 The container generates its crontab from `CRON_SCHEDULE`. Cron mode stays root.
 
 Cron runs one export immediately at container startup, then waits for the next
-matching clock time. A schedule such as `0 */6 * * *` therefore runs once on
-startup and subsequently at six-hour boundaries (in the container `TZ`).
+matching clock time. Between runs, BusyBox `crond` stays quiet by default (no
+every-minute scan noise). A schedule such as `0 */6 * * *` therefore runs once
+on startup and subsequently at six-hour boundaries (00:00 / 06:00 / 12:00 /
+18:00 in the container `TZ`) — silence at other times is expected.
 
 ```yaml
 services:
@@ -158,9 +161,10 @@ container environment for jobs. Crontabs are regenerated from env on each
 start unless the crontab file is mounted read-only.
 
 Both scheduler modes write export start/output/completion messages to
-standard output (visible in Docker, Portainer, and Arcane live logs).
-Tune BusyBox verbosity with `CROND_LOG_LEVEL` (default `2`; `0` is most
-verbose).
+standard output (visible in Docker, Portainer, and Arcane live logs), prefixed
+with `ente-cli:`. Cron is quiet between scheduled runs; set `CROND_LOG_LEVEL=2`
+(or `0` for most verbose) to debug BusyBox `crond` itself. The default is `8`
+(BusyBox's quiet default).
 
 At startup, the container also logs the selected scheduler, for example:
 
@@ -172,6 +176,7 @@ or:
 
 ```
 Selected scheduler: cron
+Cron will stay quiet until the next schedule match (CRON_SCHEDULE=0 */6 * * *)...
 Starting Alpine BusyBox crond in foreground (logging to stdout)...
 ```
 

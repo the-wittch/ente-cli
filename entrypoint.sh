@@ -10,19 +10,19 @@ CRONTAB_DIR="$(dirname "$CRONTAB_FILE")"
 RUN_USER="${RUN_USER:-enteuser}"
 HEALTHCHECK_URL="${HEALTHCHECK_URL:-}"
 LOCK_DIR="${LOCK_DIR:-/tmp/ente-export.lock}"
-CROND_LOG_LEVEL="${CROND_LOG_LEVEL:-2}"
+CROND_LOG_LEVEL="${CROND_LOG_LEVEL:-8}"
 TZ="${TZ:-UTC}"
 export TZ
 
 cleanup() {
     rmdir "$LOCK_DIR" 2>/dev/null || true
-    echo "Received signal, shutting down."
+    echo "ente-cli: Received signal, shutting down."
     exit 0
 }
 trap cleanup TERM INT
 
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S %Z')] $*"
+    echo "ente-cli: [$(date '+%Y-%m-%d %H:%M:%S %Z')] $*"
 }
 
 ping_healthcheck() {
@@ -150,6 +150,7 @@ case "$SCHEDULER" in
         echo "----- crontab -----"
         cat "$CRONTAB_FILE"
         echo "-------------------"
+        echo "Cron will stay quiet until the next schedule match (CRON_SCHEDULE=${CRON_SCHEDULE}). An initial export already ran (or is about to run) at startup."
         ;;
     *)
         echo "ERROR: SCHEDULER must be 'loop' or 'cron' (got '$SCHEDULER')." >&2
@@ -166,6 +167,7 @@ if [ "$SCHEDULER" = "cron" ]; then
     run_export || true
     echo "Initial export finished; continuing to crond."
     echo "Starting Alpine BusyBox crond in foreground (logging to stdout)..."
+    echo "BusyBox debug noise is disabled unless CROND_LOG_LEVEL is lowered (e.g. 2 or 0). Current CROND_LOG_LEVEL=${CROND_LOG_LEVEL}."
     exec crond -f -l "$CROND_LOG_LEVEL" -L /proc/1/fd/1 -c "$CRONTAB_DIR"
 fi
 
