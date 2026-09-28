@@ -13,6 +13,7 @@ concurrency:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   build:
@@ -29,12 +30,22 @@ jobs:
           echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
           echo "Upstream ente-io/ente HEAD: $SHA"
 
+      - name: Restore last built upstream SHA
+        uses: actions/cache/restore@v4
+        with:
+          path: .last-built-upstream-sha
+          key: last-built-upstream-sha-${{ steps.upstream.outputs.sha }}
+          restore-keys: |
+            last-built-upstream-sha-
+
       - name: Check if changed
         id: changed
         run: |
           UPSTREAM_SHA="${{ steps.upstream.outputs.sha }}"
           LAST_SHA=""
-          if [ -f UPSTREAM_SHA ]; then
+          if [ -f .last-built-upstream-sha ]; then
+            LAST_SHA=$(cat .last-built-upstream-sha)
+          elif [ -f UPSTREAM_SHA ]; then
             LAST_SHA=$(cat UPSTREAM_SHA)
           fi
           echo "Last built: ${LAST_SHA:-none}"
@@ -80,7 +91,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Update upstream SHA
+      - name: Record last built upstream SHA
+        if: steps.changed.outputs.changed == 'true'
+        run: echo "${{ steps.upstream.outputs.sha }}" > .last-built-upstream-sha
+
+      - name: Save last built upstream SHA
+        if: steps.changed.outputs.changed == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: .last-built-upstream-sha
+          key: last-built-upstream-sha-${{ steps.upstream.outputs.sha }}
+
+      - name: Stage UPSTREAM_SHA update
+        id: pin
         if: steps.changed.outputs.changed == 'true'
         run: |
           NEW_SHA="${{ steps.upstream.outputs.sha }}"
@@ -89,13 +113,30 @@ jobs:
             OLD_SHA=$(cat UPSTREAM_SHA)
           fi
 
-          if [ "$NEW_SHA" != "$OLD_SHA" ]; then
-            echo "$NEW_SHA" > UPSTREAM_SHA
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add UPSTREAM_SHA
-            git commit -m "chore: update upstream SHA to $NEW_SHA"
-            git push
+          if [ "$NEW_SHA" = "$OLD_SHA" ]; then
+            echo "UPSTREAM_SHA already current."
+            echo "needs_pr=false" >> "$GITHUB_OUTPUT"
           else
-            echo "SHA unchanged, skipping commit."
+            echo "$NEW_SHA" > UPSTREAM_SHA
+            echo "needs_pr=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Open PR to update UPSTREAM_SHA
+        if: steps.changed.outputs.changed == 'true' && steps.pin.outputs.needs_pr == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: update upstream SHA to ${{ steps.upstream.outputs.sha }}"
+          title: "chore: update upstream SHA to ${{ steps.upstream.outputs.short_sha }}"
+          body: |
+            Automated bump of `UPSTREAM_SHA` after a successful image build.
+
+            - Upstream: [`${{ steps.upstream.outputs.sha }}`](https://github.com/ente-io/ente/commit/${{ steps.upstream.outputs.sha }})
+            - Image tag: `wittchy/ente-cli:upstream-${{ steps.upstream.outputs.short_sha }}`
+
+            This PR only updates the pin used for local builds and docs.
+            The published image already includes this commit.
+          branch: chore/upstream-sha
+          delete-branch: true
+          add-paths: |
+            UPSTREAM_SHA

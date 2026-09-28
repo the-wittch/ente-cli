@@ -27,14 +27,19 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 FROM alpine:3.22
 
-RUN mkdir -p /cli-data /data
+RUN apk add --no-cache ca-certificates tzdata su-exec \
+    && addgroup -g 1000 enteuser \
+    && adduser -D -u 1000 -G enteuser enteuser \
+    && mkdir -p /cli-data /data \
+    && chown enteuser:enteuser /cli-data /data
 
 COPY --from=builder /ente-cli /usr/local/bin/ente-cli
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+ENV TZ=UTC
+
 VOLUME /cli-data /data
 
-# Root is required for BusyBox crond (SCHEDULER=cron). Loop mode could run
-# as non-root, but a single image identity keeps both schedulers simple.
+# Entrypoint drops to enteuser for SCHEDULER=loop; cron mode stays root.
 ENTRYPOINT ["/entrypoint.sh"]

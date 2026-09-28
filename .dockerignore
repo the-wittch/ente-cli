@@ -4,4 +4,6 @@
 crontab
 compose.yaml
 .dockerignore
+.gitignore
 UPSTREAM_SHA
+.last-built-upstream-sha

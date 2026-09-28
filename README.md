@@ -10,8 +10,10 @@ Built from a pinned `ente-io/ente` commit via GitHub Actions and published to [D
 ## Features
 
 - Static `ente-cli` binary built from a pinned `ente-io/ente` commit (sparse checkout of `cli/` only)
-- Loop-based scheduled exports by default
-- Optional Alpine BusyBox cron scheduling (configurable via environment variables or a mounted crontab)
+- Loop-based scheduled exports by default (runs as non-root `enteuser`)
+- Optional Alpine BusyBox cron scheduling (root; configurable via env or a mounted crontab)
+- Timezone support via `TZ` + `tzdata`
+- Optional Healthchecks.io-compatible success/failure pings
 - Minimal image (Alpine + binary + BusyBox crond)
 - No CGO dependencies
 
@@ -24,9 +26,10 @@ mkdir -p cli-data data
 # Start (uses compose.yaml in this repo)
 docker compose up -d
 
-# One-time login
-docker exec -it ente-cli /usr/local/bin/ente-cli account add
+# One-time login (match the loop-mode user)
+docker exec -it -u enteuser ente-cli /usr/local/bin/ente-cli account add
 ```
+
 
 Optional environment overrides for Compose:
 
@@ -36,7 +39,10 @@ Optional environment overrides for Compose:
 | `SCHEDULER` | `loop` | `loop` or `cron` |
 | `LOOP_INTERVAL` | `21600` | Seconds between loop exports |
 | `CRON_SCHEDULE` | `0 */6 * * *` | Cron expression when `SCHEDULER=cron` |
+| `TZ` | `UTC` | Container timezone (affects cron local time + log timestamps) |
+| `HEALTHCHECK_URL` | _(empty)_ | Push URL for Healthchecks.io / Uptime Kuma / similar |
 | `ENTE_DATA_PATH` | `.` | Host directory containing `cli-data/` and `data/` |
+| `RUN_USER` | `enteuser` | User for loop mode after privilege drop |
 
 ## Docker Compose Examples
 
@@ -47,7 +53,8 @@ scheduler configuration. Use one of them as your `compose.yaml`, or set
 ### Loop scheduler
 
 This is the default. It runs an export immediately when the container starts,
-then waits six hours between runs.
+then waits six hours between runs. The process drops from root to `enteuser`
+(uid/gid 1000) after fixing ownership of `/cli-data` and `/data`.
 
 ```yaml
 services:
@@ -58,6 +65,7 @@ services:
     environment:
       SCHEDULER: loop
       LOOP_INTERVAL: 21600
+      TZ: America/Chicago
     logging:
       driver: json-file
       options:
@@ -71,11 +79,11 @@ services:
 ### Cron scheduler
 
 This uses Alpine BusyBox `crond` and runs exports at the scheduled clock times.
-The container generates its crontab from `CRON_SCHEDULE`.
+The container generates its crontab from `CRON_SCHEDULE`. Cron mode stays root.
 
 Cron runs one export immediately at container startup, then waits for the next
 matching clock time. A schedule such as `0 */6 * * *` therefore runs once on
-startup and subsequently at six-hour boundaries.
+startup and subsequently at six-hour boundaries (in the container `TZ`).
 
 ```yaml
 services:
@@ -86,6 +94,7 @@ services:
     environment:
       SCHEDULER: cron
       CRON_SCHEDULE: "0 */6 * * *"
+      TZ: America/Chicago
     logging:
       driver: json-file
       options:
@@ -112,6 +121,7 @@ For the cron scheduler, set a standard five-field cron expression:
 environment:
   SCHEDULER: cron
   CRON_SCHEDULE: "0 */6 * * *"
+  TZ: America/Chicago
 ```
 
 In cron mode, the container creates `/etc/crontabs/root` from
@@ -144,8 +154,7 @@ Full format:
 main process. BusyBox scheduler diagnostics run at the most verbose log level,
 and both scheduler modes' export start message, command output, and completion
 message are written to standard output, so they are visible in Docker,
-Portainer, and Arcane live logs. BusyBox cron uses the container's timezone;
-configure the timezone if local-time scheduling is required.
+Portainer, and Arcane live logs.
 
 At startup, the container also logs the selected scheduler, for example:
 
@@ -160,15 +169,50 @@ Selected scheduler: cron
 Starting Alpine BusyBox crond in foreground (logging to stdout)...
 ```
 
+## Timezone
+
+Set `TZ` to any zoneinfo name shipped with Alpine `tzdata` (for example
+`America/Chicago`, `Europe/Berlin`, `UTC`). This affects:
+
+- BusyBox cron schedule evaluation (local clock)
+- Timestamps in container logs
+
+```yaml
+environment:
+  TZ: America/Chicago
+```
+
+## Healthchecks / monitoring pings
+
+Set `HEALTHCHECK_URL` to a push endpoint. On each export the container will:
+
+| Event | Request |
+|-------|---------|
+| Job start | `GET $HEALTHCHECK_URL/start` |
+| Job success | `GET $HEALTHCHECK_URL` |
+| Job failure | `GET $HEALTHCHECK_URL/fail` |
+
+This matches [Healthchecks.io](https://healthchecks.io) and is compatible with
+other monitors that use the same URL shape (for example Uptime Kuma push
+monitors).
+
+```yaml
+environment:
+  HEALTHCHECK_URL: https://hc-ping.com/your-uuid-here
+```
+
+Ping failures are logged as warnings and never fail the export job itself.
+
 ## CLI Usage
 
 ```bash
-# List accounts
-docker exec -it ente-cli /usr/local/bin/ente-cli account list
+# List accounts (use -u enteuser in loop mode so files stay owned correctly)
+docker exec -it -u enteuser ente-cli /usr/local/bin/ente-cli account list
 
 # Run an export manually
-docker exec -it ente-cli /usr/local/bin/ente-cli export
+docker exec -it -u enteuser ente-cli /usr/local/bin/ente-cli export
 ```
+
 
 ## Volumes
 
@@ -187,6 +231,10 @@ The image is built automatically by GitHub Actions on every push to `main`
 - `wittchy/ente-cli:<github-sha>`
 - `wittchy/ente-cli:upstream-<12-char-upstream-sha>`
 
+Schedule skip detection uses the Actions cache (last built upstream SHA).
+When the pin in `UPSTREAM_SHA` is stale after a successful build, CI opens a
+PR on `chore/upstream-sha` instead of committing directly to `main`.
+
 To build locally against the recorded upstream commit:
 
 ```bash
@@ -200,7 +248,9 @@ docker build \
 
 - Exports are **decrypted on disk** — protect the `/data` and `/cli-data` volumes
 - Back up `/cli-data` to avoid re-authenticating
-- The container runs as root so BusyBox `crond` can manage system crontabs; do not expose the Docker host or Portainer to the internet
+- Loop mode drops to `enteuser` (uid 1000). Cron mode stays root for BusyBox `crond`
+- If you previously ran as root, `/data` files may still be root-owned; fix once with `chown -R 1000:1000 data`
+- Do not expose the Docker host or Portainer to the internet
 - Prefer binding volumes to host paths with restricted permissions
 
 ## License
