@@ -8,15 +8,28 @@ LOOP_INTERVAL="${LOOP_INTERVAL:-21600}"
 CRONTAB_FILE="${CRONTAB_FILE:-/etc/crontabs/root}"
 CRONTAB_DIR="$(dirname "$CRONTAB_FILE")"
 
+trap 'echo "Received signal, shutting down."; exit 0' TERM INT
+
 run_export() {
     echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] Running scheduled export job..."
-    /usr/local/bin/ente-cli export 2>&1 | sed 's/^/  /'
-    echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] Job complete."
+    set +e
+    output="$(/usr/local/bin/ente-cli export 2>&1)"
+    status=$?
+    set -e
+    if [ -n "$output" ]; then
+        printf '%s\n' "$output" | sed 's/^/  /'
+    fi
+    if [ "$status" -eq 0 ]; then
+        echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] Job complete."
+    else
+        echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] Job failed with exit code ${status}." >&2
+    fi
+    return "$status"
 }
 
 if [ "${1:-}" = "--run-export" ]; then
     run_export
-    exit 0
+    exit $?
 fi
 
 echo "=== Ente CLI Container Starting ==="
@@ -33,6 +46,10 @@ fi
 
 case "$SCHEDULER" in
     loop)
+        if ! [ "$LOOP_INTERVAL" -gt 0 ] 2>/dev/null; then
+            echo "ERROR: LOOP_INTERVAL must be a positive integer (got '$LOOP_INTERVAL')." >&2
+            exit 1
+        fi
         echo "Selected scheduler: loop (every ${LOOP_INTERVAL} seconds)"
         ;;
     cron)
@@ -58,15 +75,16 @@ echo "================================="
 
 if [ "$SCHEDULER" = "cron" ]; then
     echo "Running initial export before waiting for the next cron time..."
-    run_export
-    echo "Initial export complete."
+    run_export || true
+    echo "Initial export finished; continuing to crond."
     echo "Starting Alpine BusyBox crond in foreground (logging to stdout)..."
     exec crond -f -l 0 -L /proc/1/fd/1 -c "$CRONTAB_DIR"
 fi
 
 echo "Starting loop scheduler..."
 while true; do
-    run_export
+    run_export || true
     echo "Next run in ${LOOP_INTERVAL} seconds."
-    sleep "$LOOP_INTERVAL"
+    sleep "$LOOP_INTERVAL" &
+    wait $! || true
 done

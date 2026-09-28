@@ -2,21 +2,26 @@ name: Cleanup Docker Hub Tags
 
 on:
   schedule:
-    - cron: '0 3 * * *'
+    # Run after the daily build (03:00 UTC) so new tags are not raced.
+    - cron: '0 4 * * *'
   workflow_dispatch: {}
+
+permissions:
+  contents: read
 
 jobs:
   cleanup:
     runs-on: ubuntu-latest
     steps:
-      - name: Delete old tags (keep latest + last 3 sha)
+      - name: Delete old tags (keep latest + last 9 version tags)
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           REPO: wittchy/ente-cli
         run: |
-          # Step 1: Get JWT token
-          JWT=$(curl -s -X POST \
+          set -eu
+
+          JWT=$(curl -sS -X POST \
             -H "Content-Type: application/json" \
             -d "{\"username\": \"$DOCKERHUB_USERNAME\", \"password\": \"$DOCKERHUB_TOKEN\"}" \
             https://hub.docker.com/v2/users/login/ \
@@ -28,27 +33,34 @@ jobs:
           fi
           echo "Authenticated successfully"
 
-          # Step 2: Get all tags sorted by last_updated (newest first)
-          TAGS=$(curl -s \
+          TAGS=$(curl -sS \
             -H "Authorization: JWT $JWT" \
             "https://hub.docker.com/v2/repositories/$REPO/tags/?page_size=100&ordering=-last_updated" \
             | jq -r '.results[].name')
 
-          # Step 3: Keep latest + last 3, delete the rest
+          if [ -z "$TAGS" ]; then
+            echo "No tags found."
+            exit 0
+          fi
+
+          # Keep: latest + the 9 most recently updated non-latest tags
+          # (about 3 builds: github-sha + upstream-sha tags each)
           KEEP=0
           while IFS= read -r name; do
+            [ -n "$name" ] || continue
+
             if [ "$name" = "latest" ]; then
               echo "Keeping: $name"
               continue
             fi
 
-            if [ "$KEEP" -lt 3 ]; then
+            if [ "$KEEP" -lt 9 ]; then
               KEEP=$((KEEP + 1))
               echo "Keeping: $name"
             else
               echo "Deleting: $name"
-              curl -s -X DELETE \
+              curl -sS -o /dev/null -w "%{http_code}\n" -X DELETE \
                 -H "Authorization: JWT $JWT" \
                 "https://hub.docker.com/v2/repositories/$REPO/tags/$name/"
             fi
-          done <<< "$TAGS"   
+          done <<< "$TAGS"

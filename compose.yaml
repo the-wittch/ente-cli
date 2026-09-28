@@ -1,0 +1,17 @@
+services:
+  ente-cli:
+    image: wittchy/ente-cli:${IMAGE_TAG:-latest}
+    container_name: ente-cli
+    restart: unless-stopped
+    environment:
+      SCHEDULER: ${SCHEDULER:-loop}
+      LOOP_INTERVAL: ${LOOP_INTERVAL:-21600}
+      CRON_SCHEDULE: ${CRON_SCHEDULE:-0 */6 * * *}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      - ${ENTE_DATA_PATH:-.}/cli-data:/cli-data:rw
+      - ${ENTE_DATA_PATH:-.}/data:/data:rw

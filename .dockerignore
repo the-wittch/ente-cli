@@ -1,0 +1,7 @@
+.git
+.github
+*.md
+crontab
+compose.yaml
+.dockerignore
+UPSTREAM_SHA

@@ -5,6 +5,11 @@ on:
     branches: [main]
   schedule:
     - cron: '0 3 * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: docker-build
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -19,7 +24,9 @@ jobs:
         id: upstream
         run: |
           SHA=$(git ls-remote https://github.com/ente-io/ente.git refs/heads/main | awk '{print $1}')
+          SHORT_SHA="${SHA:0:12}"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
           echo "Upstream ente-io/ente HEAD: $SHA"
 
       - name: Check if changed
@@ -33,13 +40,17 @@ jobs:
           echo "Last built: ${LAST_SHA:-none}"
           echo "Current:    $UPSTREAM_SHA"
 
-          # Always build on manual push, skip on schedule if unchanged
+          # Always build on push/workflow_dispatch; skip on schedule if unchanged
           if [ "$UPSTREAM_SHA" = "$LAST_SHA" ] && [ "${{ github.event_name }}" = "schedule" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No upstream changes — skipping build."
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Set up QEMU
+        if: steps.changed.outputs.changed == 'true'
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         if: steps.changed.outputs.changed == 'true'
@@ -58,9 +69,14 @@ jobs:
         with:
           context: .
           push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            UPSTREAM_SHA=${{ steps.upstream.outputs.sha }}
+            VERSION=${{ steps.upstream.outputs.short_sha }}
           tags: |
             wittchy/ente-cli:latest
             wittchy/ente-cli:${{ github.sha }}
+            wittchy/ente-cli:upstream-${{ steps.upstream.outputs.short_sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

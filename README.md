@@ -5,33 +5,44 @@
 
 Minimal Alpine container for the [Ente CLI](https://github.com/ente-io/ente/tree/main/cli) with configurable loop or cron scheduling for automated exports.
 
-Built from source on every push via GitHub Actions and published to [Docker Hub](https://hub.docker.com/r/wittch/ente-cli).
+Built from a pinned `ente-io/ente` commit via GitHub Actions and published to [Docker Hub](https://hub.docker.com/r/wittchy/ente-cli) for `linux/amd64` and `linux/arm64`.
 
 ## Features
 
-- Static `ente-cli` binary built from the latest `ente-io/ente` source
+- Static `ente-cli` binary built from a pinned `ente-io/ente` commit (sparse checkout of `cli/` only)
 - Loop-based scheduled exports by default
 - Optional Alpine BusyBox cron scheduling (configurable via environment variables or a mounted crontab)
-- Minimal image (~15 MB, Alpine + binary + BusyBox crond)
+- Minimal image (Alpine + binary + BusyBox crond)
 - No CGO dependencies
 
 ## Quick Start
 
 ```bash
 # Create directories
-mkdir -p cli-data export
+mkdir -p cli-data data
 
-# Start
+# Start (uses compose.yaml in this repo)
 docker compose up -d
 
 # One-time login
 docker exec -it ente-cli /usr/local/bin/ente-cli account add
 ```
 
+Optional environment overrides for Compose:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `IMAGE_TAG` | `latest` | Image tag |
+| `SCHEDULER` | `loop` | `loop` or `cron` |
+| `LOOP_INTERVAL` | `21600` | Seconds between loop exports |
+| `CRON_SCHEDULE` | `0 */6 * * *` | Cron expression when `SCHEDULER=cron` |
+| `ENTE_DATA_PATH` | `.` | Host directory containing `cli-data/` and `data/` |
+
 ## Docker Compose Examples
 
 The following examples use the same data volumes and differ only in the
-scheduler configuration. Use one of them as your `compose.yaml`.
+scheduler configuration. Use one of them as your `compose.yaml`, or set
+`SCHEDULER` / related variables with the included Compose file.
 
 ### Loop scheduler
 
@@ -55,12 +66,6 @@ services:
     volumes:
       - ${ENTE_DATA_PATH}/cli-data:/cli-data:rw
       - ${ENTE_DATA_PATH}/data:/data:rw
-    networks:
-      - proxy
-
-networks:
-  proxy:
-    external: true
 ```
 
 ### Cron scheduler
@@ -89,12 +94,6 @@ services:
     volumes:
       - ${ENTE_DATA_PATH}/cli-data:/cli-data:rw
       - ${ENTE_DATA_PATH}/data:/data:rw
-    networks:
-      - proxy
-
-networks:
-  proxy:
-    external: true
 ```
 
 ## Scheduling Configuration
@@ -169,7 +168,6 @@ docker exec -it ente-cli /usr/local/bin/ente-cli account list
 
 # Run an export manually
 docker exec -it ente-cli /usr/local/bin/ente-cli export
-
 ```
 
 ## Volumes
@@ -182,20 +180,29 @@ docker exec -it ente-cli /usr/local/bin/ente-cli export
 
 ## Building
 
-The image is built automatically by GitHub Actions on every push to `main` and pushed to `wittchy/ente-cli:latest` on Docker Hub.
+The image is built automatically by GitHub Actions on every push to `main`
+(and daily when upstream `ente-io/ente` changes). Images are tagged as:
 
-To build locally:
+- `wittchy/ente-cli:latest`
+- `wittchy/ente-cli:<github-sha>`
+- `wittchy/ente-cli:upstream-<12-char-upstream-sha>`
+
+To build locally against the recorded upstream commit:
 
 ```bash
-docker build -t wittchy/ente-cli:latest .
+docker build \
+  --build-arg UPSTREAM_SHA="$(cat UPSTREAM_SHA)" \
+  --build-arg VERSION="$(cut -c1-12 UPSTREAM_SHA)" \
+  -t wittchy/ente-cli:latest .
 ```
 
 ## Security Notes
 
 - Exports are **decrypted on disk** — protect the `/data` and `/cli-data` volumes
 - Back up `/cli-data` to avoid re-authenticating
-- Do not expose the Docker host or Portainer to the internet
+- The container runs as root so BusyBox `crond` can manage system crontabs; do not expose the Docker host or Portainer to the internet
+- Prefer binding volumes to host paths with restricted permissions
 
 ## License
 
-The `ente-cli` binary is licensed under [AGPL-3.0](https://github.com/ente-io/ente/blob/main/LICENSE).   
+The `ente-cli` binary is licensed under [AGPL-3.0](https://github.com/ente-io/ente/blob/main/LICENSE).
