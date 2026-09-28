@@ -142,11 +142,11 @@ Full format:
 ```
 
 `crond` runs in the foreground in cron mode, so it remains the container's
-main process. BusyBox scheduler diagnostics and both scheduler modes' export
-start message, command output, and completion message are written to standard
-output, so they are visible in Docker, Portainer, and Arcane live logs. BusyBox
-cron uses the container's timezone; configure the timezone if local-time
-scheduling is required.
+main process. BusyBox scheduler diagnostics run at the most verbose log level,
+and both scheduler modes' export start message, command output, and completion
+message are written to standard output, so they are visible in Docker,
+Portainer, and Arcane live logs. BusyBox cron uses the container's timezone;
+configure the timezone if local-time scheduling is required.
 
 At startup, the container also logs the selected scheduler, for example:
 
