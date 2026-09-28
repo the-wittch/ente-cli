@@ -151,10 +151,15 @@ Full format:
 ```
 
 `crond` runs in the foreground in cron mode, so it remains the container's
-main process. BusyBox scheduler diagnostics run at the most verbose log level,
-and both scheduler modes' export start message, command output, and completion
-message are written to standard output, so they are visible in Docker,
-Portainer, and Arcane live logs.
+main process. Generated crontabs bake in `SHELL`, `PATH`, `TZ`, and
+`HEALTHCHECK_URL` because BusyBox cron does not reliably inherit the
+container environment for jobs. Crontabs are regenerated from env on each
+start unless the crontab file is mounted read-only.
+
+Both scheduler modes write export start/output/completion messages to
+standard output (visible in Docker, Portainer, and Arcane live logs).
+Tune BusyBox verbosity with `CROND_LOG_LEVEL` (default `2`; `0` is most
+verbose).
 
 At startup, the container also logs the selected scheduler, for example:
 
@@ -221,6 +226,18 @@ docker exec -it -u enteuser ente-cli /usr/local/bin/ente-cli export
 | `/cli-data` | Account credentials & config (persist across restarts) |
 | `/data` | Export destination (decrypted files) |
 | `/etc/crontabs/root` | Optional cron schedule (mounted read-only) |
+
+## Verifying schedulers
+
+A mock-based smoke test covers both schedulers without an Ente account:
+
+```bash
+./scripts/smoke-test.sh
+```
+
+It asserts that loop mode drops to `enteuser` and fires repeatedly, and that
+cron mode runs an initial export plus a BusyBox `crond`-scheduled export with
+baked-in `TZ` / `HEALTHCHECK_URL`.
 
 ## Building
 
