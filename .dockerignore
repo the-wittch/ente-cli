@@ -1,0 +1,11 @@
+.git
+.github
+*.md
+crontab
+compose.yaml
+.dockerignore
+.gitignore
+UPSTREAM_SHA
+UPSTREAM_TAG
+.last-built-upstream-sha
+.last-built-upstream-tag

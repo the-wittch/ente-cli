@@ -5,81 +5,152 @@ on:
     branches: [main]
   schedule:
     - cron: '0 3 * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: docker-build
+  cancel-in-progress: false
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Get upstream SHA
+      - name: Resolve latest upstream cli-v* tag
         id: upstream
         run: |
-          SHA=$(git ls-remote https://github.com/ente-io/ente.git refs/heads/main | awk '{print $1}')
+          TAG=$(git ls-remote --tags https://github.com/ente-io/ente.git 'refs/tags/cli-v*' \
+            | grep -v '\^{}' \
+            | sed 's#.*refs/tags/##' \
+            | sort -V \
+            | tail -1)
+          if [ -z "$TAG" ]; then
+            echo "ERROR: no cli-v* tags found on ente-io/ente" >&2
+            exit 1
+          fi
+
+          SHA=$(git ls-remote https://github.com/ente-io/ente.git "refs/tags/${TAG}" | awk '{print $1}')
+          VERSION="${TAG#cli-}"
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "Upstream ente-io/ente HEAD: $SHA"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Upstream release: $TAG ($SHA) version=$VERSION"
+
+      - name: Restore last built upstream tag
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .last-built-upstream-tag
+          key: last-built-upstream-tag-${{ steps.upstream.outputs.tag }}
+          restore-keys: |
+            last-built-upstream-tag-
 
       - name: Check if changed
         id: changed
         run: |
-          UPSTREAM_SHA="${{ steps.upstream.outputs.sha }}"
-          LAST_SHA=""
-          if [ -f UPSTREAM_SHA ]; then
-            LAST_SHA=$(cat UPSTREAM_SHA)
+          UPSTREAM_TAG="${{ steps.upstream.outputs.tag }}"
+          LAST_TAG=""
+          if [ -f .last-built-upstream-tag ]; then
+            LAST_TAG=$(cat .last-built-upstream-tag)
+          elif [ -f UPSTREAM_TAG ]; then
+            LAST_TAG=$(cat UPSTREAM_TAG)
           fi
-          echo "Last built: ${LAST_SHA:-none}"
-          echo "Current:    $UPSTREAM_SHA"
+          echo "Last built: ${LAST_TAG:-none}"
+          echo "Current:    $UPSTREAM_TAG"
 
-          # Always build on manual push, skip on schedule if unchanged
-          if [ "$UPSTREAM_SHA" = "$LAST_SHA" ] && [ "${{ github.event_name }}" = "schedule" ]; then
+          # Always build on push/workflow_dispatch; skip on schedule if unchanged
+          if [ "$UPSTREAM_TAG" = "$LAST_TAG" ] && [ "${{ github.event_name }}" = "schedule" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No upstream changes — skipping build."
+            echo "No new cli-v* release — skipping build."
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Set up QEMU
+        if: steps.changed.outputs.changed == 'true'
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
       - name: Set up Docker Buildx
         if: steps.changed.outputs.changed == 'true'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Log in to Docker Hub
         if: steps.changed.outputs.changed == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push
         if: steps.changed.outputs.changed == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            UPSTREAM_REF=${{ steps.upstream.outputs.tag }}
+            VERSION=${{ steps.upstream.outputs.version }}
           tags: |
             wittchy/ente-cli:latest
+            wittchy/ente-cli:${{ steps.upstream.outputs.tag }}
+            wittchy/ente-cli:${{ steps.upstream.outputs.version }}
             wittchy/ente-cli:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Update upstream SHA
+      - name: Record last built upstream tag
+        if: steps.changed.outputs.changed == 'true'
+        run: echo "${{ steps.upstream.outputs.tag }}" > .last-built-upstream-tag
+
+      - name: Save last built upstream tag
+        if: steps.changed.outputs.changed == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .last-built-upstream-tag
+          key: last-built-upstream-tag-${{ steps.upstream.outputs.tag }}
+
+      - name: Stage UPSTREAM_TAG update
+        id: pin
         if: steps.changed.outputs.changed == 'true'
         run: |
-          NEW_SHA="${{ steps.upstream.outputs.sha }}"
-          OLD_SHA=""
-          if [ -f UPSTREAM_SHA ]; then
-            OLD_SHA=$(cat UPSTREAM_SHA)
+          NEW_TAG="${{ steps.upstream.outputs.tag }}"
+          OLD_TAG=""
+          if [ -f UPSTREAM_TAG ]; then
+            OLD_TAG=$(cat UPSTREAM_TAG)
           fi
 
-          if [ "$NEW_SHA" != "$OLD_SHA" ]; then
-            echo "$NEW_SHA" > UPSTREAM_SHA
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add UPSTREAM_SHA
-            git commit -m "chore: update upstream SHA to $NEW_SHA"
-            git push
+          if [ "$NEW_TAG" = "$OLD_TAG" ]; then
+            echo "UPSTREAM_TAG already current."
+            echo "needs_pr=false" >> "$GITHUB_OUTPUT"
           else
-            echo "SHA unchanged, skipping commit."
+            echo "$NEW_TAG" > UPSTREAM_TAG
+            echo "needs_pr=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Open PR to update UPSTREAM_TAG
+        if: steps.changed.outputs.changed == 'true' && steps.pin.outputs.needs_pr == 'true'
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: update upstream tag to ${{ steps.upstream.outputs.tag }}"
+          title: "chore: update upstream tag to ${{ steps.upstream.outputs.tag }}"
+          body: |
+            Automated bump of `UPSTREAM_TAG` after a successful image build.
+
+            - Upstream tag: [`${{ steps.upstream.outputs.tag }}`](https://github.com/ente-io/ente/releases/tag/${{ steps.upstream.outputs.tag }})
+            - Commit: `${{ steps.upstream.outputs.sha }}`
+            - Image tags: `wittchy/ente-cli:${{ steps.upstream.outputs.tag }}`, `wittchy/ente-cli:${{ steps.upstream.outputs.version }}`
+
+            This PR only updates the pin used for local builds and docs.
+            The published image already includes this release.
+          branch: chore/upstream-tag
+          delete-branch: true
+          add-paths: |
+            UPSTREAM_TAG
