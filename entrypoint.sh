@@ -9,6 +9,7 @@ CRONTAB_FILE="${CRONTAB_FILE:-/etc/crontabs/root}"
 CRONTAB_DIR="$(dirname "$CRONTAB_FILE")"
 RUN_USER="${RUN_USER:-enteuser}"
 HEALTHCHECK_URL="${HEALTHCHECK_URL:-}"
+HEALTHCHECK_PROVIDER="${HEALTHCHECK_PROVIDER:-}"
 LOCK_DIR="${LOCK_DIR:-/tmp/ente-export.lock}"
 CROND_LOG_LEVEL="${CROND_LOG_LEVEL:-8}"
 TZ="${TZ:-UTC}"
@@ -25,18 +26,57 @@ log() {
     echo "ente-cli: [$(date '+%Y-%m-%d %H:%M:%S %Z')] $*"
 }
 
+# Append a query parameter, using ? or & as needed.
+append_query() {
+    # $1 = url, $2 = query string without leading ?/&
+    case "$1" in
+        *\?*) printf '%s&%s' "$1" "$2" ;;
+        *) printf '%s?%s' "$1" "$2" ;;
+    esac
+}
+
+resolve_healthcheck_provider() {
+    # Prints "kuma" or "healthchecks".
+    provider="$(printf '%s' "$HEALTHCHECK_PROVIDER" | tr '[:upper:]' '[:lower:]')"
+    case "$provider" in
+        uptime-kuma|kuma) echo kuma; return 0 ;;
+        healthchecks|hc) echo healthchecks; return 0 ;;
+    esac
+    case "$HEALTHCHECK_URL" in
+        */api/push/*) echo kuma; return 0 ;;
+        *hc-ping*|*healthchecks*) echo healthchecks; return 0 ;;
+    esac
+    echo healthchecks
+}
+
 ping_healthcheck() {
     # $1 = success | fail | start
-    # Compatible with Healthchecks.io, Uptime Kuma push monitors, etc.
+    # Healthchecks.io: /start, bare URL, /fail
+    # Uptime Kuma push: skip start; ?status=up / ?status=down
     [ -n "$HEALTHCHECK_URL" ] || return 0
 
     base="${HEALTHCHECK_URL%/}"
-    case "$1" in
-        success) target="$base" ;;
-        fail) target="${base}/fail" ;;
-        start) target="${base}/start" ;;
-        *) return 0 ;;
-    esac
+    provider="$(resolve_healthcheck_provider)"
+
+    if [ "$provider" = "kuma" ]; then
+        case "$1" in
+            start)
+                # Kuma has no start heartbeat; skipping avoids resetting the
+                # grace timer before a long export finishes.
+                return 0
+                ;;
+            success) target="$(append_query "$base" "status=up&msg=ok")" ;;
+            fail) target="$(append_query "$base" "status=down&msg=fail")" ;;
+            *) return 0 ;;
+        esac
+    else
+        case "$1" in
+            success) target="$base" ;;
+            fail) target="${base}/fail" ;;
+            start) target="${base}/start" ;;
+            *) return 0 ;;
+        esac
+    fi
 
     if ! wget -q -O /dev/null -T 10 "$target" 2>/dev/null; then
         echo "WARNING: healthcheck ping failed (${1}): $target" >&2
@@ -82,6 +122,9 @@ write_crontab() {
         echo "TZ=${TZ}"
         if [ -n "$HEALTHCHECK_URL" ]; then
             echo "HEALTHCHECK_URL=${HEALTHCHECK_URL}"
+        fi
+        if [ -n "$HEALTHCHECK_PROVIDER" ]; then
+            echo "HEALTHCHECK_PROVIDER=${HEALTHCHECK_PROVIDER}"
         fi
         printf '%s %s\n' "$CRON_SCHEDULE" '/entrypoint.sh --run-export >> /proc/1/fd/1 2>&1'
     } > "$CRONTAB_FILE"
