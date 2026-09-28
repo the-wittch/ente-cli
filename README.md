@@ -255,6 +255,13 @@ The image is built automatically by GitHub Actions on every push to `main`
 - `wittchy/ente-cli:v0.3.0` (version with `cli-` prefix stripped)
 - `wittchy/ente-cli:<github-sha>`
 
+A daily cleanup workflow keeps `latest`, all `cli-v*` / `v*` release tags, and
+the 6 most recent other tags (git SHAs). For each tag it removes, it also
+deletes the multi-arch index and per-arch manifests via the Registry API so
+buildx pushes do not leave dangling digests. Untagged leftovers from older
+tag-only cleanups may still need a one-time pass in the Docker Hub UI (Hub
+does not expose untagged-image deletion via JWT alone).
+
 Schedule skip detection uses the Actions cache (last built upstream tag).
 When the pin in `UPSTREAM_TAG` is stale after a successful build, CI opens a
 PR on `chore/upstream-tag` instead of committing directly to `main`.

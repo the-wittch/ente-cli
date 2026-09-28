@@ -9,11 +9,33 @@ on:
 permissions:
   contents: read
 
+# Cleanup strategy
+# ----------------
+# Docker Hub tag DELETE only removes the tag pointer. Multi-arch (buildx)
+# pushes leave an OCI index/manifest list plus per-arch manifests that can
+# become untagged orphans. This workflow therefore:
+#   1. Lists Hub tags (JWT) and decides what to keep
+#   2. Resolves each doomed tag to its registry digest(s)
+#   3. Deletes the Hub tag
+#   4. Deletes the parent digest, then child digests, via the Registry API
+#
+# Keep rules (tagging scheme from docker.yml):
+#   - always keep `latest`
+#   - always keep release tags `cli-v*` and plain `v*` (e.g. cli-v0.3.0, v0.3.0)
+#   - keep the 6 most recently updated other tags (git SHAs, etc.)
+#   - delete everything else, including underlying manifests
+#
+# Untagged leftovers from older tag-only cleanups cannot be listed/deleted
+# with Hub JWT + Registry bearer alone (Hub's untagged-image UI needs a
+# browser session cookie). Prefer deleting digests with every tag so new
+# cleanups do not leave orphans; a one-time Hub UI pass may still be needed
+# for historical dangling manifests.
+
 jobs:
   cleanup:
     runs-on: ubuntu-latest
     steps:
-      - name: Delete old tags (keep latest + last 9 version tags)
+      - name: Delete old tags and their manifests
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -21,6 +43,14 @@ jobs:
         run: |
           set -eu
 
+          ACCEPT="application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json"
+          REGISTRY="https://registry-1.docker.io/v2/$REPO"
+
+          TAGS_DELETED=0
+          MANIFESTS_DELETED=0
+          FAILURES=0
+
+          echo "==> Authenticating to Docker Hub (JWT for tag API)"
           JWT=$(curl -sS -X POST \
             -H "Content-Type: application/json" \
             -d "{\"username\": \"$DOCKERHUB_USERNAME\", \"password\": \"$DOCKERHUB_TOKEN\"}" \
@@ -28,39 +58,171 @@ jobs:
             | jq -r '.token')
 
           if [ "$JWT" = "null" ] || [ -z "$JWT" ]; then
-            echo "ERROR: Failed to authenticate with Docker Hub"
+            echo "ERROR: Failed to authenticate with Docker Hub (JWT)"
             exit 1
           fi
-          echo "Authenticated successfully"
+          echo "Hub JWT OK"
 
-          TAGS=$(curl -sS \
-            -H "Authorization: JWT $JWT" \
-            "https://hub.docker.com/v2/repositories/$REPO/tags/?page_size=100&ordering=-last_updated" \
-            | jq -r '.results[].name')
+          echo "==> Authenticating to Registry (bearer for manifest delete)"
+          REG_TOKEN=$(curl -sS -u "${DOCKERHUB_USERNAME}:${DOCKERHUB_TOKEN}" \
+            "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${REPO}:pull,delete" \
+            | jq -r '.token')
 
-          if [ -z "$TAGS" ]; then
+          if [ "$REG_TOKEN" = "null" ] || [ -z "$REG_TOKEN" ]; then
+            echo "ERROR: Failed to authenticate with Registry (bearer)"
+            exit 1
+          fi
+          echo "Registry bearer OK"
+
+          echo "==> Listing tags (paginated, newest first)"
+          TAGS_FILE=$(mktemp)
+          URL="https://hub.docker.com/v2/repositories/${REPO}/tags/?page_size=100&ordering=-last_updated"
+          while [ -n "$URL" ] && [ "$URL" != "null" ]; do
+            RESP=$(curl -sS -H "Authorization: JWT $JWT" "$URL")
+            echo "$RESP" | jq -r '.results[]?.name // empty' >> "$TAGS_FILE"
+            URL=$(echo "$RESP" | jq -r '.next // empty')
+          done
+
+          if [ ! -s "$TAGS_FILE" ]; then
             echo "No tags found."
             exit 0
           fi
 
-          # Keep: latest + the 9 most recently updated non-latest tags
-          # (about 3 builds: github-sha + upstream-sha tags each)
-          KEEP=0
+          echo "Found $(wc -l < "$TAGS_FILE") tag(s)"
+          echo "----"
+          cat "$TAGS_FILE"
+          echo "----"
+
+          # Returns digests for a tag: parent first, then children (if any).
+          resolve_digests() {
+            local tag="$1"
+            local headers body digest media children
+
+            headers=$(curl -sS -D - -o /dev/null \
+              -H "Authorization: Bearer $REG_TOKEN" \
+              -H "Accept: $ACCEPT" \
+              "$REGISTRY/manifests/$tag" || true)
+
+            digest=$(printf '%s' "$headers" | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest"{print $2; exit}')
+            if [ -z "$digest" ]; then
+              echo "WARN: no Docker-Content-Digest for tag $tag" >&2
+              return 1
+            fi
+
+            body=$(curl -sS \
+              -H "Authorization: Bearer $REG_TOKEN" \
+              -H "Accept: $ACCEPT" \
+              "$REGISTRY/manifests/$tag" || true)
+
+            media=$(printf '%s' "$headers" | tr -d '\r' | awk -F': ' 'tolower($1)=="content-type"{print $2; exit}')
+            printf '%s\n' "$digest"
+
+            case "$media" in
+              *manifest.list.v2+json*|*image.index.v1+json*)
+                children=$(printf '%s' "$body" | jq -r '.manifests[]?.digest // empty' 2>/dev/null || true)
+                if [ -n "$children" ]; then
+                  printf '%s\n' "$children"
+                fi
+                ;;
+            esac
+          }
+
+          # DELETE one registry digest. Non-fatal on 403/404/405/500.
+          delete_manifest() {
+            local digest="$1"
+            local code
+
+            code=$(curl -sS -o /dev/null -w "%{http_code}" -X DELETE \
+              -H "Authorization: Bearer $REG_TOKEN" \
+              "$REGISTRY/manifests/$digest" || echo "000")
+
+            case "$code" in
+              202|200)
+                echo "  Manifest deleted ($code): $digest"
+                MANIFESTS_DELETED=$((MANIFESTS_DELETED + 1))
+                ;;
+              404|405|403)
+                echo "  Manifest skip ($code, non-fatal): $digest"
+                ;;
+              500)
+                # Docker docs: 500 may occur; GC retries in the background.
+                echo "  Manifest warning ($code, GC may retry): $digest"
+                FAILURES=$((FAILURES + 1))
+                ;;
+              *)
+                echo "  Manifest failure ($code): $digest"
+                FAILURES=$((FAILURES + 1))
+                ;;
+            esac
+          }
+
+          delete_tag_and_manifests() {
+            local name="$1"
+            local digests digest code
+
+            echo "Deleting: $name"
+
+            digests=$(resolve_digests "$name" || true)
+            if [ -z "$digests" ]; then
+              echo "  WARN: could not resolve digests for $name; still deleting Hub tag"
+              FAILURES=$((FAILURES + 1))
+            fi
+
+            code=$(curl -sS -o /dev/null -w "%{http_code}" -X DELETE \
+              -H "Authorization: JWT $JWT" \
+              "https://hub.docker.com/v2/repositories/${REPO}/tags/${name}/" || echo "000")
+
+            case "$code" in
+              200|202|204)
+                echo "  Hub tag deleted ($code): $name"
+                TAGS_DELETED=$((TAGS_DELETED + 1))
+                ;;
+              404)
+                echo "  Hub tag already gone ($code): $name"
+                ;;
+              *)
+                echo "  Hub tag failure ($code): $name"
+                FAILURES=$((FAILURES + 1))
+                ;;
+            esac
+
+            # Parent digest first, then per-arch children.
+            while IFS= read -r digest; do
+              [ -n "$digest" ] || continue
+              delete_manifest "$digest"
+            done <<< "$digests"
+          }
+
+          KEEP_OTHER=0
           while IFS= read -r name; do
             [ -n "$name" ] || continue
 
-            if [ "$name" = "latest" ]; then
-              echo "Keeping: $name"
-              continue
-            fi
+            case "$name" in
+              latest)
+                echo "Keeping (pinned): $name"
+                continue
+                ;;
+              cli-v*|v*)
+                echo "Keeping (release): $name"
+                continue
+                ;;
+            esac
 
-            if [ "$KEEP" -lt 9 ]; then
-              KEEP=$((KEEP + 1))
-              echo "Keeping: $name"
+            if [ "$KEEP_OTHER" -lt 6 ]; then
+              KEEP_OTHER=$((KEEP_OTHER + 1))
+              echo "Keeping (recent other #$KEEP_OTHER): $name"
             else
-              echo "Deleting: $name"
-              curl -sS -o /dev/null -w "%{http_code}\n" -X DELETE \
-                -H "Authorization: JWT $JWT" \
-                "https://hub.docker.com/v2/repositories/$REPO/tags/$name/"
+              delete_tag_and_manifests "$name"
             fi
-          done <<< "$TAGS"
+          done < "$TAGS_FILE"
+
+          rm -f "$TAGS_FILE"
+
+          echo ""
+          echo "==> Summary"
+          echo "Tags deleted:      $TAGS_DELETED"
+          echo "Manifests deleted: $MANIFESTS_DELETED"
+          echo "Failures/warnings: $FAILURES"
+
+          # Do not fail the job solely on non-fatal registry GC warnings.
+          exit 0
