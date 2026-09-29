@@ -10,7 +10,7 @@ trap 'rm -rf "$WORKDIR"; docker rm -f "$LOOP_CID" "$CRON_CID" >/dev/null 2>&1 ||
 echo "Building smoke image..."
 cat > "$WORKDIR/Dockerfile" <<'EOF'
 FROM alpine:3.22
-RUN apk add --no-cache ca-certificates tzdata su-exec \
+RUN apk add --no-cache ca-certificates tzdata su-exec curl \
     && addgroup -g 1000 enteuser \
     && adduser -D -u 1000 -G enteuser enteuser \
     && mkdir -p /cli-data /data \

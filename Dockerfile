@@ -32,7 +32,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 FROM alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
 
-RUN apk add --no-cache ca-certificates tzdata su-exec \
+RUN apk add --no-cache ca-certificates tzdata su-exec curl \
     && addgroup -g 1000 enteuser \
     && adduser -D -u 1000 -G enteuser enteuser \
     && mkdir -p /cli-data /data \

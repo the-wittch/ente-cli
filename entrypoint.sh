@@ -78,8 +78,25 @@ ping_healthcheck() {
         esac
     fi
 
-    if ! wget -q -O /dev/null -T 10 "$target" 2>/dev/null; then
-        echo "WARNING: healthcheck ping failed (${1}): $target" >&2
+    # Prefer curl (reliable HTTPS/IDN on Alpine). BusyBox wget often fails
+    # opaquely on TLS or punycode hosts; keep success quiet, surface failures.
+    set +e
+    if command -v curl >/dev/null 2>&1; then
+        err="$(curl -fsS -o /dev/null --connect-timeout 10 --max-time 15 "$target" 2>&1)"
+        rc=$?
+    else
+        err="$(wget -q -O /dev/null -T 10 "$target" 2>&1)"
+        rc=$?
+    fi
+    set -e
+
+    if [ "$rc" -ne 0 ]; then
+        snippet="$(printf '%s' "$err" | tr '\n' ' ' | sed 's/[[:space:]]\{1,\}/ /g; s/^ //; s/ $//' | cut -c1-200)"
+        if [ -n "$snippet" ]; then
+            echo "WARNING: healthcheck ping failed (${1}, exit ${rc}): $target — ${snippet}" >&2
+        else
+            echo "WARNING: healthcheck ping failed (${1}, exit ${rc}): $target" >&2
+        fi
     fi
 }
 
