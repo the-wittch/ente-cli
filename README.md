@@ -60,6 +60,9 @@ The included `compose.yaml` runs the container with:
 | `cap_drop: ALL` + `cap_add` | Keeps only `CHOWN`, `DAC_OVERRIDE`, `FOWNER` (fix volume ownership), `SETUID`, `SETGID` (drop to `enteuser`) and `KILL` (lets the init forward signals to `enteuser`) |
 | `no-new-privileges` | Nothing inside can regain privileges through setuid binaries |
 
+The image sets `ENTE_CLI_CONFIG_DIR=/cli-data`. Without it, `ente-cli` tries to
+create `~/.ente` on startup and exits when the root filesystem is read-only.
+
 The examples below leave these keys out for brevity; copy them from
 `compose.yaml` into your own file.
 

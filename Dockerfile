@@ -47,7 +47,8 @@ RUN apk add --no-cache ca-certificates tzdata su-exec curl \
 COPY --from=builder /ente-cli /usr/local/bin/ente-cli
 COPY --chmod=0755 entrypoint.sh /entrypoint.sh
 
-ENV TZ=UTC
+ENV TZ=UTC \
+    ENTE_CLI_CONFIG_DIR=/cli-data
 
 VOLUME /cli-data /data
 
