@@ -1,5 +1,4 @@
 #!/bin/sh
-# both schedulers against the real image, with a mock ente-cli and the compose.yaml security flags
 set -eu
 
 IMAGE="${IMAGE:-ente-cli-smoke}"
@@ -9,8 +8,12 @@ LOOP_CID=""
 CRON_CID=""
 trap 'rm -rf "$WORKDIR"; docker rm -f "$LOOP_CID" "$CRON_CID" >/dev/null 2>&1 || true' EXIT
 
-HARDENING="--init --read-only --tmpfs /tmp --tmpfs /etc/crontabs --security-opt no-new-privileges:true
-  --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add KILL --cap-add SETGID --cap-add SETUID"
+run_hardened() {
+    docker run --init --read-only --tmpfs /tmp --tmpfs /etc/crontabs \
+        --security-opt no-new-privileges:true --cap-drop ALL \
+        --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+        --cap-add KILL --cap-add SETGID --cap-add SETUID "$@"
+}
 
 stop_and_collect() {
     started="$(date +%s)"
@@ -31,6 +34,17 @@ docker build --target runtime -t "$IMAGE-base" "$ROOT" >"$WORKDIR/build.log" 2>&
     exit 1
 }
 
+echo ""
+echo "=== real ente-cli under the read-only filesystem ==="
+if ! REAL="$(run_hardened --rm --user 1000:1000 -v "$WORKDIR:/cli-data" \
+    --entrypoint /usr/local/bin/ente-cli "$IMAGE-base" version 2>&1)"; then
+    echo "$REAL"
+    echo "ERROR: ente-cli could not start with a read-only root filesystem" >&2
+    exit 1
+fi
+echo "$REAL"
+echo "REAL CLI OK"
+
 cat >"$WORKDIR/Dockerfile" <<EOF
 FROM $IMAGE-base
 RUN printf '%s\n' \
@@ -47,8 +61,7 @@ docker build -t "$IMAGE" "$WORKDIR" >"$WORKDIR/build.log" 2>&1 || {
 
 echo ""
 echo "=== loop (interval 2s) ==="
-# shellcheck disable=SC2086
-LOOP_CID="$(docker run -d $HARDENING \
+LOOP_CID="$(run_hardened -d \
     -e SCHEDULER=loop \
     -e LOOP_INTERVAL=2 \
     -e TZ=UTC \
@@ -77,8 +90,7 @@ echo "LOOP OK ($LOOP_JOBS jobs)"
 
 echo ""
 echo "=== cron (every minute) ==="
-# shellcheck disable=SC2086
-CRON_CID="$(docker run -d $HARDENING \
+CRON_CID="$(run_hardened -d \
     -e SCHEDULER=cron \
     -e 'CRON_SCHEDULE=* * * * *' \
     -e TZ=UTC \
