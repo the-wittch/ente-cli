@@ -29,7 +29,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -ldflags "-s -w -X main.AppVersion=${VERSION}" \
         -o /ente-cli main.go
 
-FROM alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8 AS runtime
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS runtime
 
 ARG VERSION=v0.3.0
 LABEL org.opencontainers.image.title="ente-cli" \
