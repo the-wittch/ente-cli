@@ -36,7 +36,9 @@ docker build --target runtime -t "$IMAGE-base" "$ROOT" >"$WORKDIR/build.log" 2>&
 
 echo ""
 echo "=== real ente-cli under the read-only filesystem ==="
-if ! REAL="$(run_hardened --rm --user 1000:1000 -v "$WORKDIR:/cli-data" \
+mkdir "$WORKDIR/cli-data"
+chmod 0777 "$WORKDIR/cli-data"
+if ! REAL="$(run_hardened --rm --user 1000:1000 -v "$WORKDIR/cli-data:/cli-data" \
     --entrypoint /usr/local/bin/ente-cli "$IMAGE-base" version 2>&1)"; then
     echo "$REAL"
     echo "ERROR: ente-cli could not start with a read-only root filesystem" >&2
