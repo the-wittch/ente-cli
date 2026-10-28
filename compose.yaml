@@ -3,12 +3,30 @@ services:
     image: wittchy/ente-cli:${IMAGE_TAG:-latest}
     container_name: ente-cli
     restart: unless-stopped
+    init: true
     environment:
       SCHEDULER: ${SCHEDULER:-loop}
       LOOP_INTERVAL: ${LOOP_INTERVAL:-21600}
       CRON_SCHEDULE: "${CRON_SCHEDULE:-0 */6 * * *}"
       TZ: ${TZ:-UTC}
       HEALTHCHECK_URL: ${HEALTHCHECK_URL:-}
+      HEALTHCHECK_PROVIDER: ${HEALTHCHECK_PROVIDER:-}
+      CROND_LOG_LEVEL: ${CROND_LOG_LEVEL:-8}
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /etc/crontabs
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - KILL
+      - SETGID
+      - SETUID
     logging:
       driver: json-file
       options:

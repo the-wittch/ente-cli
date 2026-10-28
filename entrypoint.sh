@@ -26,9 +26,7 @@ log() {
     echo "ente-cli: [$(date '+%Y-%m-%d %H:%M:%S %Z')] $*"
 }
 
-# Append a query parameter, using ? or & as needed.
 append_query() {
-    # $1 = url, $2 = query string without leading ?/&
     case "$1" in
         *\?*) printf '%s&%s' "$1" "$2" ;;
         *) printf '%s?%s' "$1" "$2" ;;
@@ -36,35 +34,25 @@ append_query() {
 }
 
 resolve_healthcheck_provider() {
-    # Prints "kuma" or "healthchecks".
     provider="$(printf '%s' "$HEALTHCHECK_PROVIDER" | tr '[:upper:]' '[:lower:]')"
     case "$provider" in
         uptime-kuma|kuma) echo kuma; return 0 ;;
         healthchecks|hc) echo healthchecks; return 0 ;;
     esac
     case "$HEALTHCHECK_URL" in
-        */api/push/*) echo kuma; return 0 ;;
-        *hc-ping*|*healthchecks*) echo healthchecks; return 0 ;;
+        */api/push/*) echo kuma ;;
+        *) echo healthchecks ;;
     esac
-    echo healthchecks
 }
 
 ping_healthcheck() {
-    # $1 = success | fail | start
-    # Healthchecks.io: /start, bare URL, /fail
-    # Uptime Kuma push: skip start; ?status=up / ?status=down
     [ -n "$HEALTHCHECK_URL" ] || return 0
 
     base="${HEALTHCHECK_URL%/}"
-    provider="$(resolve_healthcheck_provider)"
-
-    if [ "$provider" = "kuma" ]; then
+    if [ "$(resolve_healthcheck_provider)" = "kuma" ]; then
         case "$1" in
-            start)
-                # Kuma has no start heartbeat; skipping avoids resetting the
-                # grace timer before a long export finishes.
-                return 0
-                ;;
+            # kuma has no start heartbeat; one would reset its timer mid-export
+            start) return 0 ;;
             success) target="$(append_query "$base" "status=up&msg=ok")" ;;
             fail) target="$(append_query "$base" "status=down&msg=fail")" ;;
             *) return 0 ;;
@@ -78,25 +66,23 @@ ping_healthcheck() {
         esac
     fi
 
-    # Prefer curl (reliable HTTPS/IDN on Alpine). BusyBox wget often fails
-    # opaquely on TLS or punycode hosts; keep success quiet, surface failures.
     set +e
-    if command -v curl >/dev/null 2>&1; then
-        err="$(curl -fsS -o /dev/null --connect-timeout 10 --max-time 15 "$target" 2>&1)"
-        rc=$?
-    else
-        err="$(wget -q -O /dev/null -T 10 "$target" 2>&1)"
-        rc=$?
-    fi
+    err="$(curl -fsS -o /dev/null --connect-timeout 10 --max-time 15 "$target" 2>&1)"
+    rc=$?
     set -e
 
     if [ "$rc" -ne 0 ]; then
-        snippet="$(printf '%s' "$err" | tr '\n' ' ' | sed 's/[[:space:]]\{1,\}/ /g; s/^ //; s/ $//' | cut -c1-200)"
-        if [ -n "$snippet" ]; then
-            echo "WARNING: healthcheck ping failed (${1}, exit ${rc}): $target — ${snippet}" >&2
-        else
-            echo "WARNING: healthcheck ping failed (${1}, exit ${rc}): $target" >&2
-        fi
+        # the url is the secret, so name the host only
+        host="$(printf '%s' "$target" | sed -E 's#^([a-zA-Z]+://[^/?]+).*#\1#')"
+        echo "WARNING: healthcheck ping failed (${1}, exit ${rc}) to ${host}: $(printf '%s' "$err" | tr '\n' ' ' | cut -c1-200)" >&2
+    fi
+}
+
+ente() {
+    if [ "$(id -u)" -eq 0 ]; then
+        su-exec "$RUN_USER" /usr/local/bin/ente-cli "$@"
+    else
+        /usr/local/bin/ente-cli "$@"
     fi
 }
 
@@ -110,13 +96,13 @@ run_export() {
     ping_healthcheck start
 
     set +e
-    output="$(/usr/local/bin/ente-cli export 2>&1)"
+    (
+        # shellcheck disable=SC3040 # busybox ash has pipefail
+        set -o pipefail
+        ente export 2>&1 | sed 's/^/  /'
+    )
     status=$?
     set -e
-
-    if [ -n "$output" ]; then
-        printf '%s\n' "$output" | sed 's/^/  /'
-    fi
 
     if [ "$status" -eq 0 ]; then
         log "Job complete."
@@ -131,12 +117,12 @@ run_export() {
 }
 
 write_crontab() {
-    # BusyBox crond does not reliably pass the container env to jobs, so bake
-    # the needed variables into the crontab itself.
+    # busybox crond doesn't pass the container env to jobs
     {
         echo "SHELL=/bin/sh"
         echo "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         echo "TZ=${TZ}"
+        echo "RUN_USER=${RUN_USER}"
         if [ -n "$HEALTHCHECK_URL" ]; then
             echo "HEALTHCHECK_URL=${HEALTHCHECK_URL}"
         fi
@@ -153,19 +139,20 @@ if [ "${1:-}" = "--run-export" ]; then
     exit $?
 fi
 
-# Loop mode runs as non-root. Cron stays root for BusyBox crond/crontabs.
-if [ "$SCHEDULER" = "loop" ] && [ "$(id -u)" -eq 0 ]; then
+if [ "$(id -u)" -eq 0 ]; then
     if ! id "$RUN_USER" >/dev/null 2>&1; then
         echo "ERROR: RUN_USER '$RUN_USER' does not exist." >&2
         exit 1
     fi
-
-    # Directory ownership only for /data (large trees). Fix /cli-data fully.
+    # /tmp outlives a restart; an export cut off by a stop leaves its lock behind
+    rmdir "$LOCK_DIR" 2>/dev/null || true
     chown "$RUN_USER:$RUN_USER" /cli-data /data 2>/dev/null || true
     chown -R "$RUN_USER:$RUN_USER" /cli-data 2>/dev/null || true
 
-    echo "Dropping privileges to ${RUN_USER} for loop scheduler..."
-    exec su-exec "$RUN_USER" /entrypoint.sh "$@"
+    if [ "$SCHEDULER" = "loop" ]; then
+        echo "Dropping privileges to ${RUN_USER} for loop scheduler..."
+        exec su-exec "$RUN_USER" /entrypoint.sh "$@"
+    fi
 fi
 
 echo "=== Ente CLI Container Starting ==="
@@ -178,9 +165,8 @@ fi
 echo ""
 
 if [ ! -f /cli-data/ente-cli.db ]; then
-    echo "WARNING: /cli-data/ente-cli.db not found."
-    echo "You need to run 'ente-cli account add' to log in first."
-    echo "  docker exec -it -u $(id -un) ente-cli /usr/local/bin/ente-cli account add"
+    echo "WARNING: /cli-data/ente-cli.db not found. Log in first:"
+    echo "  docker exec -it -u ${RUN_USER} ente-cli /usr/local/bin/ente-cli account add"
     echo ""
 fi
 
@@ -197,20 +183,15 @@ case "$SCHEDULER" in
             echo "ERROR: SCHEDULER=cron requires running the container as root." >&2
             exit 1
         fi
-        echo "Selected scheduler: cron"
+        echo "Selected scheduler: cron (exports run as ${RUN_USER})"
         mkdir -p "$CRONTAB_DIR"
 
         if [ -f "$CRONTAB_FILE" ] && [ ! -w "$CRONTAB_FILE" ]; then
             echo "Crontab: using mounted read-only file $CRONTAB_FILE"
         else
             write_crontab
-            echo "Crontab: wrote $CRONTAB_FILE from environment"
-            echo "Schedule: $CRON_SCHEDULE"
+            echo "Crontab: wrote $CRONTAB_FILE (schedule: $CRON_SCHEDULE)"
         fi
-        echo "----- crontab -----"
-        cat "$CRONTAB_FILE"
-        echo "-------------------"
-        echo "Cron will stay quiet until the next schedule match (CRON_SCHEDULE=${CRON_SCHEDULE}). An initial export already ran (or is about to run) at startup."
         ;;
     *)
         echo "ERROR: SCHEDULER must be 'loop' or 'cron' (got '$SCHEDULER')." >&2
@@ -223,15 +204,11 @@ echo "Starting scheduler..."
 echo "================================="
 
 if [ "$SCHEDULER" = "cron" ]; then
-    echo "Running initial export before waiting for the next cron time..."
     run_export || true
-    echo "Initial export finished; continuing to crond."
-    echo "Starting Alpine BusyBox crond in foreground (logging to stdout)..."
-    echo "BusyBox debug noise is disabled unless CROND_LOG_LEVEL is lowered (e.g. 2 or 0). Current CROND_LOG_LEVEL=${CROND_LOG_LEVEL}."
+    echo "Initial export done; crond takes over (CRON_SCHEDULE=${CRON_SCHEDULE}, CROND_LOG_LEVEL=${CROND_LOG_LEVEL})."
     exec crond -f -l "$CROND_LOG_LEVEL" -L /proc/1/fd/1 -c "$CRONTAB_DIR"
 fi
 
-echo "Starting loop scheduler..."
 while true; do
     run_export || true
     echo "Next run in ${LOOP_INTERVAL} seconds."

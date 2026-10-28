@@ -37,9 +37,11 @@ jobs:
           SHA=$(git ls-remote https://github.com/ente-io/ente.git "refs/tags/${TAG}" | awk '{print $1}')
           VERSION="${TAG#cli-}"
 
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          {
+            echo "tag=$TAG"
+            echo "sha=$SHA"
+            echo "version=$VERSION"
+          } >> "$GITHUB_OUTPUT"
           echo "Upstream release: $TAG ($SHA) version=$VERSION"
 
       - name: Restore last built upstream tag
@@ -63,13 +65,16 @@ jobs:
           echo "Last built: ${LAST_TAG:-none}"
           echo "Current:    $UPSTREAM_TAG"
 
-          # Always build on push/workflow_dispatch; skip on schedule if unchanged
           if [ "$UPSTREAM_TAG" = "$LAST_TAG" ] && [ "${{ github.event_name }}" = "schedule" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No new cli-v* release — skipping build."
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Smoke test
+        if: steps.changed.outputs.changed == 'true'
+        run: ./scripts/smoke-test.sh
 
       - name: Set up QEMU
         if: steps.changed.outputs.changed == 'true'
