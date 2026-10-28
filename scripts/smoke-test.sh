@@ -1,57 +1,73 @@
 #!/bin/sh
-# Smoke-test loop and cron schedulers with a mock ente-cli (no Ente account needed).
+# both schedulers against the real image, with a mock ente-cli and the compose.yaml security flags
 set -eu
 
 IMAGE="${IMAGE:-ente-cli-smoke}"
 ROOT="$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)"
 WORKDIR="$(mktemp -d)"
+LOOP_CID=""
+CRON_CID=""
 trap 'rm -rf "$WORKDIR"; docker rm -f "$LOOP_CID" "$CRON_CID" >/dev/null 2>&1 || true' EXIT
 
-echo "Building smoke image..."
-cat > "$WORKDIR/Dockerfile" <<'EOF'
-FROM alpine:3.22
-RUN apk add --no-cache ca-certificates tzdata su-exec curl \
-    && addgroup -g 1000 enteuser \
-    && adduser -D -u 1000 -G enteuser enteuser \
-    && mkdir -p /cli-data /data \
-    && chown enteuser:enteuser /cli-data /data
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh \
-    && printf '%s\n' \
+HARDENING="--init --read-only --tmpfs /tmp --tmpfs /etc/crontabs --security-opt no-new-privileges:true
+  --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add KILL --cap-add SETGID --cap-add SETUID"
+
+stop_and_collect() {
+    started="$(date +%s)"
+    docker stop -t 8 "$1" >/dev/null
+    took=$(($(date +%s) - started))
+    docker logs "$1" >"$2" 2>&1 || true
+    docker rm -f "$1" >/dev/null
+    if [ "$took" -ge 5 ]; then
+        cat "$2"
+        echo "ERROR: took ${took}s to stop, SIGTERM is not reaching the scheduler" >&2
+        exit 1
+    fi
+}
+
+echo "Building the runtime image..."
+docker build --target runtime -t "$IMAGE-base" "$ROOT" >"$WORKDIR/build.log" 2>&1 || {
+    cat "$WORKDIR/build.log" >&2
+    exit 1
+}
+
+cat >"$WORKDIR/Dockerfile" <<EOF
+FROM $IMAGE-base
+RUN printf '%s\n' \
         '#!/bin/sh' \
-        'if [ "${1:-}" = "version" ]; then echo "ente-cli mock 0.0.0"; exit 0; fi' \
-        'echo "MOCK_EXPORT user=$(id -un) uid=$(id -u) tz=${TZ:-unset} hc=${HEALTHCHECK_URL:-unset}"' \
-        'exit 0' \
+        'if [ "\${1:-}" = "version" ]; then echo "ente-cli mock 0.0.0"; exit 0; fi' \
+        'echo "MOCK_EXPORT user=\$(id -un) uid=\$(id -u) tz=\${TZ:-unset}"' \
         > /usr/local/bin/ente-cli \
     && chmod +x /usr/local/bin/ente-cli
-ENV TZ=UTC
-ENTRYPOINT ["/entrypoint.sh"]
 EOF
-
-cp "$ROOT/entrypoint.sh" "$WORKDIR/entrypoint.sh"
-docker build -t "$IMAGE" "$WORKDIR" >/tmp/ente-smoke-build.log
+docker build -t "$IMAGE" "$WORKDIR" >"$WORKDIR/build.log" 2>&1 || {
+    cat "$WORKDIR/build.log" >&2
+    exit 1
+}
 
 echo ""
-echo "=== LOOP smoke test (interval=2s, ~7s runtime) ==="
-LOOP_CID="$(docker run -d \
+echo "=== loop (interval 2s) ==="
+# shellcheck disable=SC2086
+LOOP_CID="$(docker run -d $HARDENING \
     -e SCHEDULER=loop \
     -e LOOP_INTERVAL=2 \
     -e TZ=UTC \
-    -e HEALTHCHECK_URL=https://example.invalid/ping \
+    -e HEALTHCHECK_URL=https://example.invalid/ping/secret-token \
     "$IMAGE")"
 sleep 7
 LOOP_LOG="$WORKDIR/loop.log"
-docker logs "$LOOP_CID" >"$LOOP_LOG" 2>&1 || true
-docker rm -f "$LOOP_CID" >/dev/null
+stop_and_collect "$LOOP_CID" "$LOOP_LOG"
 LOOP_CID=""
-
-echo "--- loop log ---"
 cat "$LOOP_LOG"
-echo "----------------"
 
 grep -q 'Dropping privileges to enteuser' "$LOOP_LOG"
 grep -q 'Selected scheduler: loop' "$LOOP_LOG"
 grep -q 'MOCK_EXPORT user=enteuser uid=1000' "$LOOP_LOG"
+grep -q 'Received signal, shutting down' "$LOOP_LOG"
+if grep -q 'secret-token' "$LOOP_LOG"; then
+    echo "ERROR: the healthcheck url leaked into the log" >&2
+    exit 1
+fi
 LOOP_JOBS="$(grep -c 'Job complete\.' "$LOOP_LOG" || true)"
 if [ "$LOOP_JOBS" -lt 2 ]; then
     echo "ERROR: expected >=2 loop jobs, got $LOOP_JOBS" >&2
@@ -60,48 +76,38 @@ fi
 echo "LOOP OK ($LOOP_JOBS jobs)"
 
 echo ""
-echo "=== CRON smoke test (* * * * *, wait for scheduled fire) ==="
-# Quote the schedule carefully so the shell never glob-expands '*'.
-CRON_CID="$(docker run -d \
+echo "=== cron (every minute) ==="
+# shellcheck disable=SC2086
+CRON_CID="$(docker run -d $HARDENING \
     -e SCHEDULER=cron \
     -e 'CRON_SCHEDULE=* * * * *' \
     -e TZ=UTC \
-    -e HEALTHCHECK_URL=https://example.invalid/ping \
+    -e HEALTHCHECK_URL=https://example.invalid/ping/secret-token \
     "$IMAGE")"
 
 CRON_LOG="$WORKDIR/cron.log"
 i=0
 while [ "$i" -lt 90 ]; do
     docker logs "$CRON_CID" >"$CRON_LOG" 2>&1 || true
-    JOBS="$(grep -c 'MOCK_EXPORT ' "$CRON_LOG" 2>/dev/null || true)"
-    if [ "${JOBS:-0}" -ge 2 ]; then
+    if [ "$(grep -c 'MOCK_EXPORT ' "$CRON_LOG" 2>/dev/null || true)" -ge 2 ]; then
         break
     fi
     sleep 1
     i=$((i + 1))
 done
-
-docker logs "$CRON_CID" >"$CRON_LOG" 2>&1 || true
-docker rm -f "$CRON_CID" >/dev/null
+stop_and_collect "$CRON_CID" "$CRON_LOG"
 CRON_CID=""
-
-echo "--- cron log ---"
 cat "$CRON_LOG"
-echo "----------------"
 
-grep -q 'Selected scheduler: cron' "$CRON_LOG"
-grep -q 'HEALTHCHECK_URL=https://example.invalid/ping' "$CRON_LOG"
-grep -q 'Starting Alpine BusyBox crond' "$CRON_LOG"
-grep -q 'Cron will stay quiet until the next schedule match' "$CRON_LOG"
-grep -q 'BusyBox debug noise is disabled unless CROND_LOG_LEVEL is lowered' "$CRON_LOG"
-CRON_JOBS="$(grep -c 'MOCK_EXPORT ' "$CRON_LOG" || true)"
-if [ "$CRON_JOBS" -lt 2 ]; then
-    echo "ERROR: expected initial + scheduled cron export (>=2), got $CRON_JOBS" >&2
+grep -q 'Selected scheduler: cron (exports run as enteuser)' "$CRON_LOG"
+grep -q 'crond takes over' "$CRON_LOG"
+if grep -q 'secret-token' "$CRON_LOG"; then
+    echo "ERROR: the healthcheck url leaked into the log" >&2
     exit 1
 fi
-grep -q 'MOCK_EXPORT user=root uid=0' "$CRON_LOG"
-if ! grep -q 'MOCK_EXPORT user=root uid=0 tz=UTC hc=https://example.invalid/ping' "$CRON_LOG"; then
-    echo "ERROR: cron job missing baked environment (TZ/HEALTHCHECK_URL)" >&2
+CRON_JOBS="$(grep -c 'MOCK_EXPORT user=enteuser uid=1000 tz=UTC' "$CRON_LOG" || true)"
+if [ "$CRON_JOBS" -lt 2 ]; then
+    echo "ERROR: expected the startup export and a scheduled one as enteuser, got $CRON_JOBS" >&2
     exit 1
 fi
 echo "CRON OK ($CRON_JOBS jobs)"

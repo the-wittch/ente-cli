@@ -10,9 +10,10 @@ Built from the latest upstream [`cli-v*`](https://github.com/ente-io/ente/releas
 ## Features
 
 - Static `ente-cli` binary built from a pinned `cli-v*` release (sparse checkout of `cli/` only)
-- Digest-pinned base images and commit-SHA-pinned GitHub Actions
+- Digest-pinned base images and commit-SHA-pinned GitHub Actions, kept current by Dependabot
 - Loop-based scheduled exports by default (runs as non-root `enteuser`)
-- Optional Alpine BusyBox cron scheduling (root; configurable via env or a mounted crontab)
+- Optional Alpine BusyBox cron scheduling (configurable via env or a mounted crontab; exports still run as `enteuser`)
+- Hardened Compose file: read-only root filesystem, minimal capabilities, `no-new-privileges`
 - Timezone support via `TZ` + `tzdata`
 - Optional Healthchecks.io-compatible success/failure pings
 - Minimal image (Alpine + binary + BusyBox crond)
@@ -27,7 +28,7 @@ mkdir -p cli-data data
 # Start (uses compose.yaml in this repo)
 docker compose up -d
 
-# One-time login (match the loop-mode user)
+# One-time login
 docker exec -it -u enteuser ente-cli /usr/local/bin/ente-cli account add
 ```
 
@@ -45,7 +46,22 @@ Optional environment overrides for Compose:
 | `HEALTHCHECK_URL` | _(empty)_ | Push URL for Healthchecks.io / Uptime Kuma / similar |
 | `HEALTHCHECK_PROVIDER` | _(auto)_ | `healthchecks`, `uptime-kuma` / `kuma`, or leave empty to auto-detect from the URL |
 | `ENTE_DATA_PATH` | `.` | Host directory containing `cli-data/` and `data/` |
-| `RUN_USER` | `enteuser` | User for loop mode after privilege drop |
+| `RUN_USER` | `enteuser` | User that runs exports in both modes |
+
+## Hardening
+
+The included `compose.yaml` runs the container with:
+
+| Setting | Why |
+|---------|-----|
+| `read_only: true` | Root filesystem is immutable; only the volumes and two tmpfs mounts are writable |
+| `tmpfs: /tmp, /etc/crontabs` | Export lock and generated crontab, both cleared on restart |
+| `init: true` | Forwards `docker stop` to the scheduler so it shuts down at once instead of being killed after 10s |
+| `cap_drop: ALL` + `cap_add` | Keeps only `CHOWN`, `DAC_OVERRIDE`, `FOWNER` (fix volume ownership), `SETUID`, `SETGID` (drop to `enteuser`) and `KILL` (lets the init forward signals to `enteuser`) |
+| `no-new-privileges` | Nothing inside can regain privileges through setuid binaries |
+
+The examples below leave these keys out for brevity; copy them from
+`compose.yaml` into your own file.
 
 ## Docker Compose Examples
 
@@ -82,7 +98,8 @@ services:
 ### Cron scheduler
 
 This uses Alpine BusyBox `crond` and runs exports at the scheduled clock times.
-The container generates its crontab from `CRON_SCHEDULE`. Cron mode stays root.
+The container generates its crontab from `CRON_SCHEDULE`. `crond` itself runs as
+root, and every export it starts drops to `enteuser`.
 
 Cron runs one export immediately at container startup, then waits for the next
 matching clock time. Between runs, BusyBox `crond` stays quiet by default (no
@@ -156,10 +173,11 @@ Full format:
 ```
 
 `crond` runs in the foreground in cron mode, so it remains the container's
-main process. Generated crontabs bake in `SHELL`, `PATH`, `TZ`, and
-`HEALTHCHECK_URL` because BusyBox cron does not reliably inherit the
-container environment for jobs. Crontabs are regenerated from env on each
-start unless the crontab file is mounted read-only.
+main process. Generated crontabs bake in `SHELL`, `PATH`, `TZ`, `RUN_USER`,
+`HEALTHCHECK_URL` and `HEALTHCHECK_PROVIDER` because BusyBox cron does not
+pass the container environment to jobs. Crontabs are regenerated from env on
+each start unless the crontab file is mounted read-only. The crontab is never
+printed to the log, since it holds the healthcheck URL.
 
 Both scheduler modes write export start/output/completion messages to
 standard output (visible in Docker, Portainer, and Arcane live logs), prefixed
@@ -176,9 +194,10 @@ Selected scheduler: loop (every 21600 seconds)
 or:
 
 ```
-Selected scheduler: cron
-Cron will stay quiet until the next schedule match (CRON_SCHEDULE=0 */6 * * *)...
-Starting Alpine BusyBox crond in foreground (logging to stdout)...
+Selected scheduler: cron (exports run as enteuser)
+Crontab: wrote /etc/crontabs/root (schedule: 0 */6 * * *)
+...
+Initial export done; crond takes over (CRON_SCHEDULE=0 */6 * * *, CROND_LOG_LEVEL=8).
 ```
 
 ## Timezone
@@ -240,11 +259,12 @@ Examples: loop every 6h (`LOOP_INTERVAL=21600`) → heartbeat 7–8h; cron every
 6h → heartbeat ~7–8h.
 
 Ping failures are logged as warnings and never fail the export job itself.
+The warning names only the host, because the push URL is the secret.
 
 ## CLI Usage
 
 ```bash
-# List accounts (use -u enteuser in loop mode so files stay owned correctly)
+# List accounts (-u enteuser keeps files owned by the export user)
 docker exec -it -u enteuser ente-cli /usr/local/bin/ente-cli account list
 
 # Run an export manually
@@ -268,9 +288,12 @@ A mock-based smoke test covers both schedulers without an Ente account:
 ./scripts/smoke-test.sh
 ```
 
-It asserts that loop mode drops to `enteuser` and fires repeatedly, and that
-cron mode runs an initial export plus a BusyBox `crond`-scheduled export with
-baked-in `TZ` / `HEALTHCHECK_URL`.
+It builds the real image, swaps `ente-cli` for a mock, and runs both modes with
+the same hardening flags as `compose.yaml`. It checks that exports run as
+`enteuser` in both modes and repeat on schedule, that `TZ` reaches cron jobs,
+that the healthcheck URL never appears in the log, and that `docker stop`
+shuts the container down cleanly. CI runs it on every pull request and before
+every push to Docker Hub.
 
 ## Building
 
@@ -285,7 +308,9 @@ The image is built automatically by GitHub Actions on every push to `main`
 A daily cleanup workflow keeps `latest`, all `cli-v*` / `v*` release tags, and
 the 6 most recent other tags (git SHAs). For each tag it removes, it also
 deletes the multi-arch index and per-arch manifests via the Registry API so
-buildx pushes do not leave dangling digests. Untagged leftovers from older
+buildx pushes do not leave dangling digests. Digests still used by a kept tag
+are never deleted, since a rebuild of unchanged source can produce the same
+digest as `latest`. Untagged leftovers from older
 tag-only cleanups may still need a one-time pass in the Docker Hub UI (Hub
 does not expose untagged-image deletion via JWT alone).
 
@@ -307,8 +332,10 @@ docker build \
 
 - Exports are **decrypted on disk** — protect the `/data` and `/cli-data` volumes
 - Back up `/cli-data` to avoid re-authenticating
-- Loop mode drops to `enteuser` (uid 1000). Cron mode stays root for BusyBox `crond`
-- If you previously ran as root, `/data` files may still be root-owned; fix once with `chown -R 1000:1000 data`
+- Exports run as `enteuser` (uid 1000) in both modes; only BusyBox `crond` stays root in cron mode
+- Use the hardening keys from `compose.yaml` (see [Hardening](#hardening))
+- Treat `HEALTHCHECK_URL` as a secret; anyone with it can mark your job up or down
+- If you previously ran exports as root, `/data` files may still be root-owned; fix once with `chown -R 1000:1000 data`
 - Do not expose the Docker host or Portainer to the internet
 - Prefer binding volumes to host paths with restricted permissions
 
